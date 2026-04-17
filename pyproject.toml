@@ -48,12 +48,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pyflakes"]
+dev = ["pytest>=7.0", "pytest-cov"]
 
 [project.urls]
 Homepage = "https://github.com/conchoecia/egt"
 "Source code" = "https://github.com/conchoecia/egt"
-"Manuscript" = "https://github.com/conchoecia/egt/blob/main/docs/manuscript.md"
 "odp" = "https://github.com/conchoecia/odp"
 
 [project.scripts]
@@ -64,3 +63,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 egt = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

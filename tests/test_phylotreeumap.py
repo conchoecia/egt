@@ -1,16 +1,6 @@
-# insert the path to the source file
-# ODP-specific imports
-import sys
-import os
+import unittest
 
-thisdir = os.path.dirname(os.path.abspath(__file__))
-source_path = os.path.join(thisdir, "../dev_scripts")
-if source_path not in sys.path:
-    sys.path.insert(1, source_path)
-import PhyloTreeUMAP
-
-
-import unittest   # The test framework
+from egt import phylotreeumap as PhyloTreeUMAP
 
 
 class Test_taxids_to_analyses(unittest.TestCase):
