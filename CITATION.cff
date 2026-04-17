@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the preferred citation below."
+title: "egt: Evolutionary Genome Topology analysis toolkit"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/conchoecia/egt"
+authors:
+  - family-names: Schultz
+    given-names: "Darrin T."
+    email: darrin.schultz@univie.ac.at
+preferred-citation:
+  type: article
+  title: "Topological mixing and irreversibility in animal chromosome evolution"
+  year: 2024
+  journal: "bioRxiv"
+  doi: 10.1101/2024.07.29.605683
+  url: "https://doi.org/10.1101/2024.07.29.605683"
+  authors:
+    - family-names: Schultz
+      given-names: "Darrin T."
+    - family-names: Blümel
+      given-names: Arno
+    - family-names: Destanović
+      given-names: Dalila
+    - family-names: Sarigol
+      given-names: Fatih
+    - family-names: Simakov
+      given-names: Oleg

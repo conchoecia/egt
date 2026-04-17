@@ -1,0 +1,9 @@
+This repo (egt) was extracted from conchoecia/odp on the `decay-branch` at
+commit 898101525a8a84e4e9aad3b51504d578d08a3844, frozen in odp at tag
+`odp-pre-egt-split-20260416`.
+
+Related conchoecia repos:
+  - odp:       https://github.com/conchoecia/odp
+  - chrombase: https://github.com/conchoecia/chrombase
+  - genbargo:  https://github.com/conchoecia/genbargo
+  - chromsim:  https://github.com/conchoecia/chromsim

@@ -1,0 +1,24 @@
+# Per-environment paths. Copy this to config.yaml and edit for your system.
+
+# Per-species RBH dataframes (one per assembly). These are ODP outputs.
+RBH_DIR: /path/to/rbh_files
+
+# Sample metadata dataframe (index = sample ID, columns include taxid etc.)
+SAMPLEDF_TSV: /path/to/sampledf.tsv
+
+# node_information.tsv emitted by `egt newick-to-common-ancestors`
+TREE_INFO: /path/to/tree.node_information.tsv
+
+# BCnSSimakov2022 ALG database RBH file (see conchoecia/odp LG_db)
+ALG_RBH: /path/to/LG_db/BCnSSimakov2022/BCnSSimakov2022.rbh
+ALG_NAME: BCnS
+
+# Output root
+OUT_DIR: ./out
+
+# Monte Carlo iterations for perspchrom_df_to_tree
+MC_ITERATIONS: 1000
+
+# UMAP hyperparameters swept for Fig 4
+UMAP_N_NEIGHBORS: [25, 50, 100, 250]
+UMAP_MIN_DIST:    [0.0, 0.1, 0.25, 0.5, 1.0]

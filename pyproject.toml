@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "egt"
+version = "0.1.0"
+description = "Evolutionary Genome Topology — analysis toolkit for chromosome evolution across metazoan genomes using reciprocal-best-hits data."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Darrin T. Schultz", email = "darrin.schultz@univie.ac.at" },
+]
+keywords = [
+  "comparative genomics",
+  "chromosome evolution",
+  "ancestral linkage groups",
+  "ALG",
+  "synteny",
+  "UMAP",
+  "phylogenetics",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "numpy",
+  "pandas",
+  "scipy",
+  "scikit-learn",
+  "matplotlib",
+  "networkx",
+  "Pillow",
+  "umap-learn[plot]",
+  "bokeh",
+  "ete4",
+  "snakemake>=7,<9",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pyflakes"]
+
+[project.urls]
+Homepage = "https://github.com/conchoecia/egt"
+"Source code" = "https://github.com/conchoecia/egt"
+"Manuscript" = "https://github.com/conchoecia/egt/blob/main/docs/manuscript.md"
+"odp" = "https://github.com/conchoecia/odp"
+
+[project.scripts]
+egt = "egt.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+egt = ["py.typed"]
