@@ -231,6 +231,13 @@ If you use this toolkit, please cite:
 > *Topological mixing and irreversibility in animal chromosome evolution.*
 > bioRxiv. [doi:10.1101/2024.07.29.605683](https://doi.org/10.1101/2024.07.29.605683)
 
+For background on the topological framework for comparative genomics, see:
+
+> Schultz, D.T., Simakov, O. (2026).
+> *Topological Approaches in Animal Comparative Genomics.*
+> Annual Review of Animal Biosciences 14(1), 17–48.
+> [doi:10.1146/annurev-animal-030424-084541](https://doi.org/10.1146/annurev-animal-030424-084541)
+
 See also [`CITATION.cff`](CITATION.cff).
 
 ## License
