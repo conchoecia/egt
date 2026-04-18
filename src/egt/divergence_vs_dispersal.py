@@ -66,10 +66,19 @@ def _load_presence_fusions(presence_fusions_tsv: Path, dispersal_column: str | N
         n_alg = df[alg_cols].map(_to01).sum(axis=1).astype(int)
         disp = 1.0 - (n_alg / max(len(alg_cols), 1))
 
+    # Pass plain arrays (not pandas Series/Index objects whose name="species"
+    # would cause the result's index to also be named "species", tripping
+    # the "both index level and column label" ambiguity on the downstream
+    # merge(..., on="species").
+    species_col = df.index.to_numpy()
+    if "taxidstring" in df.columns:
+        taxid_col = df["taxidstring"].fillna("").to_numpy()
+    else:
+        taxid_col = [""] * len(df)
     return pd.DataFrame({
-        "species": df.index,
+        "species": species_col,
         "dispersal": disp.values,
-        "taxidstring": df["taxidstring"].fillna("") if "taxidstring" in df.columns else "",
+        "taxidstring": taxid_col,
     })
 
 
