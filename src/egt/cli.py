@@ -37,6 +37,12 @@ SUBCOMMANDS: dict[str, tuple[str, str]] = {
     "aggregate-filesizes":      ("egt.aggregate_filesizes",        "Aggregate file-size summaries"),
     "join-supplementary-tables":("egt.join_supplementary_tables",  "Join supplementary-table fragments"),
     "phylotreeumap-plotdfs":    ("egt.phylotreeumap_plotdfs",      "PhyloTreeUMAP plotting dataframes"),
+    "palette-preview":          ("egt.palette_preview",            "Render a tree colored by the paper palette (sanity-check)"),
+    "pigeonhole-check":         ("egt.pigeonhole_check",           "Null-model test for shared ALG fusions on small karyotypes"),
+    "divergence-vs-dispersal":  ("egt.divergence_vs_dispersal",    "Correlate protein divergence with ALG dispersal"),
+    "build-family-naming-map":  ("egt.build_family_naming_map",    "BCnS ALG family → human gene ID map"),
+    "entanglement-browse":      ("egt.entanglement_browse",        "Rank clade-characteristic ALG fusion pairs"),
+    "entanglement-go-enrich":   ("egt.entanglement_go_enrich",     "GO enrichment on clade-characteristic ALG genes"),
 }
 
 

@@ -62,7 +62,7 @@ egt = "egt.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-egt = ["py.typed"]
+egt = ["py.typed", "data/*.yaml", "data/*.tsv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
