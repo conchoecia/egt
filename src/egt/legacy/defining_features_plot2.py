@@ -14,7 +14,7 @@ from egt.phylotreeumap import algcomboix_file_to_dict
 import numpy as np
 import os
 import pandas as pd
-import source.rbh_tools as rbh_tools
+from egt import rbh_tools
 import scipy.stats as stats
 import sys
 
@@ -168,6 +168,96 @@ def scatter_hist(x, y, xlabel, ylabel, ax, ax_histx, ax_histy,
     ax.tick_params(axis='both', which='major', labelsize=fontsize)
     ax_histx.tick_params(axis='both', which='major', labelsize=fontsize)
     ax_histy.tick_params(axis='both', which='major', labelsize=fontsize)
+
+# ---------------------------------------------------------------------------
+# Pure-function helpers for the flag derivation step.
+#
+# These encapsulate the math that used to live inline in ``main()`` so it can
+# be unit-tested without running the whole pipeline (which also writes
+# PDFs and assumes a directory of .tsv.gz inputs). ``main()`` calls into
+# these below.
+#
+# Documented formulas (TODO_tests.md §F):
+#   - z-score:  (x - mean(x)) / std(x)  over the clade's pairs, where
+#     x = sd_in_out_ratio_log (after dropping inf/NaN). Same formula for
+#     the mean_in_out_ratio_log.
+#   - close_in_clade   == 1  iff  mean_ratio_sigma < -sigma  AND  occ_in >= 0.5
+#   - stable_in_clade  == 1  iff  sd_ratio_sigma   < -sigma  AND  occ_in >= 0.5
+#   - distant_in_clade == 1  iff  mean_ratio_sigma >  sigma  AND  occ_in >= 0.5
+#   - unstable_in_clade== 1  iff  sd_ratio_sigma   >  sigma  AND  occ_in >= 0.5
+#   - unique_to_clade  == 1  iff  notna_out == 0
+#
+# These are extracted out verbatim from the inline flag-assignment block
+# in main(), to keep regression coverage honest.
+# ---------------------------------------------------------------------------
+
+def add_ratio_columns(df, pseudocount=1):
+    """Add the four *_ratio / *_ratio_log columns to a per-clade df.
+
+    Adds a small pseudocount to mean_in/out and sd_in/out before taking
+    the log10-ratio, matching the original inline behavior.
+    """
+    df = df.copy()
+    df["mean_in"]  = df["mean_in"]  + pseudocount
+    df["mean_out"] = df["mean_out"] + pseudocount
+    df["sd_in"]    = df["sd_in"]    + pseudocount
+    df["sd_out"]   = df["sd_out"]   + pseudocount
+    df["sd_in_out_ratio"]       = df["sd_in"]   / df["sd_out"]
+    df["sd_in_out_ratio_log"]   = np.log10(df["sd_in_out_ratio"])
+    df["mean_in_out_ratio"]     = df["mean_in"] / df["mean_out"]
+    df["mean_in_out_ratio_log"] = np.log10(df["mean_in_out_ratio"])
+    return df
+
+
+def compute_z_scores(df):
+    """Add sd_in_out_ratio_log_sigma and mean_in_out_ratio_log_sigma
+    columns. The z-score is taken over the clade's pairs (each row in
+    df is one pair). Mean and std are pandas defaults (ddof=1),
+    matching the original code.
+
+    Assumes df has been filtered to occupancy_in >= 0.5 already (that's
+    what the original code does before computing sigma; the statistic
+    is on that subset so including low-occupancy pairs would skew it).
+    """
+    df = df.copy()
+    x = df["sd_in_out_ratio_log"]
+    df["sd_in_out_ratio_log_sigma"] = (x - x.mean()) / x.std()
+    y = df["mean_in_out_ratio_log"]
+    df["mean_in_out_ratio_log_sigma"] = (y - y.mean()) / y.std()
+    return df
+
+
+def assign_flags(df, sd_number=2):
+    """Derive the 5 clade-defining flags from the z-scored + occupancy
+    columns. Mutates in place and returns df.
+
+    TODO_tests §F flags (all integers 0/1):
+      - stable_in_clade   : sd_sigma   <  -sd_number  AND occ_in >= 0.5
+      - unstable_in_clade : sd_sigma   >   sd_number  AND occ_in >= 0.5
+      - close_in_clade    : mean_sigma <  -sd_number  AND occ_in >= 0.5
+      - distant_in_clade  : mean_sigma >   sd_number  AND occ_in >= 0.5
+      - unique_to_clade   : notna_out == 0
+    """
+    df = df.copy()
+    df["stable_in_clade"]   = np.where(
+        (df["sd_in_out_ratio_log_sigma"]   < -sd_number) &
+        (df["occupancy_in"] >= 0.5), 1, 0,
+    )
+    df["unstable_in_clade"] = np.where(
+        (df["sd_in_out_ratio_log_sigma"]   >  sd_number) &
+        (df["occupancy_in"] >= 0.5), 1, 0,
+    )
+    df["close_in_clade"]    = np.where(
+        (df["mean_in_out_ratio_log_sigma"] < -sd_number) &
+        (df["occupancy_in"] >= 0.5), 1, 0,
+    )
+    df["distant_in_clade"]  = np.where(
+        (df["mean_in_out_ratio_log_sigma"] >  sd_number) &
+        (df["occupancy_in"] >= 0.5), 1, 0,
+    )
+    df["unique_to_clade"]   = np.where(df["notna_out"] == 0, 1, 0)
+    return df
+
 
 def main():
     args = parse_args()

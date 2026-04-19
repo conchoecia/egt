@@ -4433,6 +4433,24 @@ def _cmd_algcomboix(args):
     return 0
 
 
+def _cmd_combine_distances(args):
+    sampledf = pd.read_csv(args.sampledf, sep="\t", index_col=0)
+    alg_combo_to_ix = algcomboix_file_to_dict(args.algcomboix)
+    print(f"[combine-distances] sampledf: {len(sampledf)} species")
+    print(f"[combine-distances] algcomboix: {len(alg_combo_to_ix)} pairs")
+    coo = construct_coo_matrix_from_sampledf(
+        sampledf, alg_combo_to_ix,
+        path_column=args.path_column,
+        sample_column=args.sample_column,
+        check_paths_exist=not args.no_check_paths,
+    )
+    print(f"[combine-distances] shape={coo.shape} nnz={coo.nnz}")
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)) or ".", exist_ok=True)
+    save_npz(args.output, coo)
+    print(f"[combine-distances] wrote {args.output}")
+    return 0
+
+
 def _cmd_odog_umap(args):
     plot_umap_from_files(
         sampledffile=args.sampledf,
@@ -4520,6 +4538,15 @@ def main(argv=None):
     p.add_argument("--alg-rbh", required=True, help="ALG database RBH file (BCnSSimakov2022.rbh or similar).")
     p.add_argument("--output", required=True, help="Output TSV: '(locus1, locus2)\\tindex' per line.")
     p.set_defaults(func=_cmd_algcomboix)
+
+    p = sub.add_parser("combine-distances", help="Combine per-species distance files (from build-distances) into an all-samples sparse distance matrix.")
+    p.add_argument("--sampledf", required=True, help="Sample dataframe TSV from build-distances (index 0..N-1, one row per species).")
+    p.add_argument("--algcomboix", required=True, help="ALG combo → index TSV from `algcomboix`.")
+    p.add_argument("--output", required=True, help="Output .npz path (e.g. allsamples.coo.npz).")
+    p.add_argument("--path-column", default="dis_filepath_abs", help="sampledf column holding absolute paths to per-species .gb.gz files.")
+    p.add_argument("--sample-column", default="sample", help="sampledf column holding the species key.")
+    p.add_argument("--no-check-paths", action="store_true", help="Skip filesystem existence check for each .gb.gz path.")
+    p.set_defaults(func=_cmd_combine_distances)
 
     p = sub.add_parser("odog-umap", help="One-Dot-One-Genome UMAP: project genomes onto an ALG-topology UMAP.")
     p.add_argument("--sampledf", required=True, help="Sample dataframe TSV from build-distances.")
