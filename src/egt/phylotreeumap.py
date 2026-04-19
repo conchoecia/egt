@@ -2615,6 +2615,23 @@ def construct_coo_matrix_from_sampledf(
         raise ValueError(f"Duplicate '{sample_column}' values found (e.g., {dupes!r}). "
                  f"Sample names must be unique to map files safely.")
 
+    # Invariant: sampledf.index MUST equal np.arange(len(sampledf)) so that
+    # the `idx` yielded by iterrows() coincides with the positional row
+    # offset. The COO builder below assigns `df["row_indices"] = idx` for
+    # each species' distance file; any downstream code then uses
+    # sampledf.iloc[row_idx] (positional) to identify the species owning
+    # a COO row. If these disagree, the COO ends up with the right values
+    # at the wrong species' rows — a silent row-scramble that invalidates
+    # every per-species and per-clade statistic derived from it. This
+    # happened at least once (see TODO_tests.md, K). Reset + assert here.
+    import numpy as np
+    if not (sampledf.index.to_numpy() == np.arange(len(sampledf))).all():
+        _p(f"sampledf.index was not 0..N-1; calling reset_index(drop=True) "
+           f"to keep COO row-ordering aligned with positional access.")
+        sampledf = sampledf.reset_index(drop=True)
+    assert (sampledf.index.to_numpy() == np.arange(len(sampledf))).all(), \
+        "internal: sampledf.index != 0..N-1 after reset_index"
+
     # Basic sanity on alg_combo_to_ix keys should make sense
     for n, key in enumerate(alg_combo_to_ix):
         if not isinstance(key, tuple):
@@ -2708,7 +2725,17 @@ def construct_coo_matrix_from_sampledf(
         if not pd.api.types.is_numeric_dtype(df["distance"]):
             df["distance"] = pd.to_numeric(df["distance"], errors="raise")
 
-        df["row_indices"] = idx  # use the *current* DataFrame index (preserved unless reset_row_index=True)
+        # Use pos-1 explicitly (positional) rather than `idx` so this
+        # can't silently scramble if sampledf's index is ever non-
+        # RangeIndex despite the reset_index above. Since reset_index
+        # has been run, idx == pos-1 holds; the explicit positional is
+        # belt-and-suspenders against any future refactor that moves
+        # the reset.
+        row_pos = pos - 1
+        assert row_pos == idx, (
+            f"internal: expected idx == pos-1 after reset_index, "
+            f"got idx={idx}, pos-1={row_pos}")
+        df["row_indices"] = row_pos
         tempdfs.append(df)
         n_rows_total += len(df)
 
