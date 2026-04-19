@@ -9,6 +9,12 @@ on:
 permissions:
   contents: write
 
+env:
+  # Opt in early to Node 24 for JS actions that still bundle Node 20
+  # (e.g. stefanzweifel/git-auto-commit-action@v5). GitHub will flip
+  # this default on 2026-06-02, after which this flag is a no-op.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   test:
     strategy:
