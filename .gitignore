@@ -83,3 +83,9 @@ dist/
 .venv/
 env/
 .python-version
+
+# coverage artifacts (badge is the only thing tracked; images/coverage-badge.svg)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

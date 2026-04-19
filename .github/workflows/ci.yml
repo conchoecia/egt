@@ -6,6 +6,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   test:
     strategy:
@@ -35,5 +38,19 @@ jobs:
       - name: Syntax check
         run: python -m compileall -q src/egt
 
-      - name: Run test suite
-        run: pytest tests/ -v --tb=short
+      - name: Run test suite (with coverage)
+        run: pytest tests/ -v --tb=short --cov=egt --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Generate coverage badge
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          pip install "genbadge[coverage]"
+          mkdir -p images
+          genbadge coverage -i coverage.xml -o images/coverage-badge.svg
+
+      - name: Commit coverage badge
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update coverage badge [skip ci]"
+          file_pattern: images/coverage-badge.svg
