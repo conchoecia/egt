@@ -12,7 +12,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz
+from scipy.sparse import coo_matrix, lil_matrix, csr_matrix, save_npz, load_npz
 import time
 
 from egt.phylotreeumap import (algcomboix_file_to_dict)
@@ -75,8 +75,10 @@ def load_coo(cdf, coofile, ALGcomboix, missing_value_as):
     lil.data[lil.data == 0] = -1
     # We have to convert this to a dense matrix now. There is no way to modify the large values in a sparse matrix.
     print("Converting to a dense matrix. RAM will increase now.")
-    # Goodbye, RAM.
-    matrix = lil.toarray().astype(float)
+    # float32 is plenty of precision for inter-locus distances (in bp) and
+    # halves the memory vs default float64. For the 202509 release's
+    # 5821 species x 2.79M pairs, that's ~65 GB instead of ~130 GB.
+    matrix = lil.toarray().astype(np.float32)
     del lil
     # if the missing_values is "large", then we have to convert the 0 to the missing_value_as
     # Here we switch the representation, namely we don't have to access the data with .data now that this
@@ -87,6 +89,91 @@ def load_coo(cdf, coofile, ALGcomboix, missing_value_as):
     print("converting -1s to 0")
     matrix[matrix == -1] = 0
     return matrix
+
+def load_coo_sparse(cdf, coofile, ALGcomboix):
+    """Load the COO NPZ and return a CSR with stored zeros removed.
+
+    The original `load_coo` above (dense path) tried to protect
+    biologically-real zero-distance pairs via a `lil.data == 0` flip
+    that, by inspection of the actual data, never fired the way the
+    comments suggested — so in practice every stored-zero cell in the
+    dense matrix was converted to NaN and dropped from the stats.
+
+    Direct verification against the per-species RBH files on the
+    202509 dataset (post_analyses/defining_features_pairs/
+    zero_pairs_chrom_entries_annelida.tsv) shows that the COO's stored
+    zeros are NOT biologically-real exact-neighbor observations: of
+    185 Annelida stored-zero cells, zero corresponded to two orthologs
+    at the same position; most had orthologs on different scaffolds or
+    on the same scaffold at real distances of 7 kb to 25 Mb. So the
+    stored zeros are upstream placeholders (likely "distance not
+    computable" or similar), not observations.
+
+    We therefore strip stored zeros at load time. This matches the
+    effective behavior of the original code (zeros dropped) without
+    pretending they're observations.
+    """
+    print("loading the coo file (sparse path)")
+    coo = load_npz(coofile)
+    if coo.shape[0] > max(cdf.index) + 1:
+        raise ValueError(f"COO has more rows ({coo.shape[0]}) than cdf "
+                         f"({max(cdf.index) + 1}).")
+    if max(ALGcomboix.values()) > coo.shape[1] - 1:
+        raise ValueError(f"ALGcomboix max index ({max(ALGcomboix.values())}) "
+                         f"> COO cols - 1 ({coo.shape[1] - 1}).")
+    # float64 for stable sum-of-squares (distances can be 1e8 bp → sq 1e16
+    # → sum across thousands of species 1e19, beyond float32 mantissa).
+    print(f"  COO: shape={coo.shape}  nnz={coo.nnz}  "
+          f"density={coo.nnz/(coo.shape[0]*coo.shape[1]):.5f}")
+    csr = coo.tocsr().astype(np.float64)
+    del coo
+    # Drop stored zeros — they're upstream placeholders (non-observations),
+    # not biologically real zero-distance measurements. After this, every
+    # stored entry in `csr` is a real observation with value > 0.
+    n_before = csr.nnz
+    csr.eliminate_zeros()
+    n_after = csr.nnz
+    print(f"  dropped {n_before - n_after} stored-zero cells "
+          f"({(n_before - n_after) / max(n_before, 1) * 100:.4f}%)")
+    return csr
+
+
+def compute_col_aggregates(csr):
+    """Return (notna, sum_v, sumsq_v) per column as numpy arrays.
+
+    Assumes `csr` has already had stored zeros eliminated (see
+    `load_coo_sparse`), so every stored entry is a real observation
+    with value > 0. No shift is applied; the aggregates are directly
+    in the observed (bp) domain.
+
+    notna    = per-column count of stored entries.
+    sum_v    = per-column sum of stored values.
+    sumsq_v  = per-column sum of squares of stored values.
+    """
+    notna = np.asarray(csr.getnnz(axis=0)).ravel().astype(np.int64)
+    sum_v = np.asarray(csr.sum(axis=0)).ravel().astype(np.float64)
+    sumsq_v = np.asarray(csr.multiply(csr).sum(axis=0)).ravel().astype(np.float64)
+    return notna, sum_v, sumsq_v
+
+
+def _mean_std_sample(notna, sum_v, sumsq_v):
+    """Return mean and sample stddev (ddof=1) per column, matching pandas.
+
+    NaN where notna==0 for mean, or notna<2 for stddev. Negative variance
+    from float noise is clamped to 0.
+    """
+    n = notna.astype(np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean = np.where(n > 0, sum_v / np.maximum(n, 1.0), np.nan)
+        # var = (sumsq - n*mean^2) / (n - 1)
+        centered = sumsq_v - n * mean * mean
+        centered[~np.isfinite(centered)] = 0.0
+        centered[centered < 0] = 0.0
+        denom = np.where(n > 1, n - 1.0, 1.0)
+        var = centered / denom
+        std = np.where(n > 1, np.sqrt(var), np.nan)
+    return mean, std
+
 
 def compute_statistics(col, inindex, outindex):
     """
@@ -151,121 +238,137 @@ def process_coo_file(sampledffile, ALGcomboixfile, coofile,
     if not isinstance(taxid_list, list):
         raise ValueError(f"taxid_list must be a list. Got {taxid_list} instead. Exiting.")
 
-    # read in the sample dataframe. We will need this later
-    cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
+    # Sparse-native path: never densify the matrix. Work on a CSR with
+    # values +1-shifted (see load_coo_sparse for why — lets us distinguish
+    # "observed exactly-neighboring pair, distance 0" from "not observed
+    # at all", matching the original's `lil.data[lil.data == 0] = -1`
+    # trick). All per-clade stats then come from four vectorized sparse
+    # aggregations on row-sliced views.
+    cdf = pd.read_csv(sampledffile, sep="\t", index_col=0)
     # print the columns of cdf
     # Read in the ALGcomboixfile
     ALGcomboix = algcomboix_file_to_dict(ALGcomboixfile)
-    ALGcomboix_inverse = {v: k for k, v in ALGcomboix.items()}
-    matrix = load_coo(cdf, coofile, ALGcomboix, missing_value_as)
-    print("done loading the matrix")
-    print(f"dimensions of the matrix are: {matrix.shape}")
-    print(matrix)
-    # convert the matrix to a df, where species are labeled with the cdf samples, and the combinations are labeled with the ALGcomboix
-    # we have to transpose the matrix to get the species as the rows
-    print(cdf)
-    df = pd.DataFrame(matrix, index=cdf.index,
-                      columns=[i for i in range(matrix.shape[1])])
+
+    csr = load_coo_sparse(cdf, coofile, ALGcomboix)
+    print(f"done loading the matrix: shape={csr.shape}  nnz={csr.nnz}")
+
+    # Whole-matrix per-column aggregates, computed once and reused across
+    # clades. For each clade we then only need the in-clade slice's
+    # aggregates — out-clade falls out by subtraction, no need to
+    # materialize another slice per iteration.
+    t0 = time.time()
+    total_notna, total_sum_v, total_sumsq_v = compute_col_aggregates(csr)
+    print(f"  - global aggregates in {time.time() - t0:.1f}s")
 
     # now find the things that define the species
     # convert the column "taxid_list" to a list of ints. use eval
     cdf["taxid_list"] = cdf["taxid_list"].apply(eval)
     # first collect all of the ncbi taxids from the cdf dict
     all_taxids = set()
-    for i, row in cdf.iterrows():
+    for _, row in cdf.iterrows():
         all_taxids.update(row["taxid_list"])
-
-    # we should delete the columns from the df that are all nan for each taxid
-    print("We are deleting the columns that are full of nans for each taxid. shape: ", df.shape)
-    df = df.dropna(axis = 1, how = "all")
-    print("New shape: ", df.shape)
 
     # If the user specified some taxids, we will only iterate over those taxids
     # Otherwise, go through all of the taxids in the cdf
     if len(taxid_list) > 0:
-        iterate_taxids = taxid_list
+        iterate_taxids = list(taxid_list)
         # make sure that all of the taxids that we want to iterate through are in all_taxids.
         for taxid in iterate_taxids:
             if taxid not in all_taxids:
                 raise ValueError(f"taxid {taxid} is not in the taxids in the cdf. Exiting.")
     else:
-        iterate_taxids = all_taxids
+        iterate_taxids = sorted(all_taxids)
 
-    entries = []
-    # precompute the "in" and "out" indices
-    # Precompute the inindex and outindex for each taxid
-    # innan_dict is a dictionary that stores the columns that are nan for each taxid
-    inindex_dict = {}
-    outindex_dict = {}
-    innan_dict   = {}
-
-    start = time.time()
-    print("Starting the precomputation of inindex and outindex")
-    for taxid in iterate_taxids:
-        inindex  = cdf[cdf["taxid_list"].apply(lambda x: taxid in x)].index
-        outindex = cdf.index.difference(inindex)
-        inindex_dict[ taxid ] = inindex
-        outindex_dict[taxid ] = outindex
-        # give me all of the colnames that are only nan for this taxid
-        innan_dict[   taxid]  = df.loc[inindex,  df.columns].isna().all()
-    print("  - Time to precompute inindex and outindex: ", time.time() - start)
+    # Per-species membership cached as a set per row of cdf. CSR rows are
+    # integer-positional, so the N-th element of this array corresponds to
+    # the N-th row of the CSR, same as the N-th row of cdf.
+    taxid_sets = cdf["taxid_list"].apply(set).to_numpy()
 
     # load NCBI now that we know we will use it. Past the "taxid not in dataset" check
     NCBI = ete3.NCBITaxa()
+    name_replacements = {" ": "", ",": "", ";": "", "(": "", ")": "",
+                         ".": "", "-": "", "_": ""}
     # For each taxid, get the pairs that are unique to this taxid
-    counter = 1
-    for taxid in iterate_taxids:
-        nodename = NCBI.get_taxid_translator([taxid])[taxid]
-        print(f"Starting taxid {taxid}, {nodename} ({counter} of {len(iterate_taxids)})")
-        replace_dict = {" ": "", ",": "", ";": "", "(": "", ")": "", ".": "", "-": "", "_": ""}
-        for k, v in replace_dict.items():
+    for counter, taxid in enumerate(iterate_taxids, start=1):
+        nodename_raw = NCBI.get_taxid_translator([taxid])[taxid]
+        nodename = nodename_raw
+        for k, v in name_replacements.items():
             nodename = nodename.replace(k, v)
-        outprefix = f"{nodename}_{taxid}"
-        outfile = outprefix + "_unique_pair_df.tsv.gz"
+        outfile = f"{nodename}_{taxid}_unique_pair_df.tsv.gz"
         if os.path.exists(outfile):
-            print(f"{outfile} already exists. Skipping.")
-            counter += 1
+            print(f"[{counter}/{len(iterate_taxids)}] {nodename_raw} -- "
+                  f"{outfile} already exists. Skipping.")
             continue
 
-        # get the samples that have this taxid
-        inindex  = inindex_dict[taxid]
+        # Boolean row mask over the full CSR — True for in-clade species.
+        in_mask = np.fromiter((taxid in s for s in taxid_sets),
+                              count=len(taxid_sets), dtype=bool)
+        n_in = int(in_mask.sum())
+        n_out = int((~in_mask).sum())
         # if there are at least two samples, we should continue to analyze this
-        if len(inindex) < 2:
+        # if the size of the out-clade is zero, we don't analyze it
+        if n_in < 2 or n_out == 0:
+            print(f"[{counter}/{len(iterate_taxids)}] {nodename_raw} -- "
+                  f"skipped (n_in={n_in}, n_out={n_out})")
             continue
-        # get everything that isn't in inindex
-        outindex = outindex_dict[taxid]
-        # if the size of this is zero, we don't analyze it
-        if len(outindex) == 0:
-            continue
-        # Apply function to each column. Only do it on the columns that are not all nan
-        ignore_columns = innan_dict[taxid][innan_dict[taxid]].index
-        # set everything after the first 50 columns to True
-        #ignore_columns = df.columns[50:]
-        print("  - We are filtering out ", len(ignore_columns), " columns.")
-        stats = df.loc[:, df.columns.difference(ignore_columns)].apply(
-            lambda col: compute_statistics(col, inindex, outindex)
-        )
-        print("This is stats")
-        # turn this list of dictionaries into a df
-        unique_pair_df = pd.DataFrame(stats.tolist())
-        #unique_pair_df["mean_in_out_ratio"] = unique_pair_df["mean_in"] / unique_pair_df["mean_out"]
-        # The following distribution is close to normal in log space, if not a little skewed.
-        #  Because it has this property, for each pair we can measure where it falls in the distribution.
-        #  If sd_in_out_ratio is nan, that is because the value does not appear in the out samples, meaning this is a new feature for this taxid.
-        #  If sd_in_out_ratio is 0, this means that the variance was 0 for the in samples. This probably means that this pair was only measured twice?
-        #  So from this number we can rank the pairs based on that ratio, then filter even more for well-represented pairs.
-        #  From the other information we can get the things that do not occur in other samples, and that have a small SD or a small mean.
-        #unique_pair_df["sd_in_out_ratio"]   = unique_pair_df["sd_in"]   / unique_pair_df["sd_out"]
-        print("This is unique_pair_df")
-        print(unique_pair_df)
-        # save this so we can play with it
-        unique_pair_df.to_csv(outfile, sep = "\t", index = False, compression = "gzip")
-        counter += 1
 
-    # convert entries to a df
-    entries_df = pd.DataFrame(entries)
-    # save this to a gzipped tsv
-    entries_df.to_csv("unique_pairs.tsv.gz", sep = "\t", index = False, compression = "gzip")
+        t1 = time.time()
+        csr_in = csr[in_mask, :]
+        notna_in, sum_v_in, sumsq_v_in = compute_col_aggregates(csr_in)
+
+        # Out-clade aggregates by subtraction — avoids materializing
+        # csr[out_mask, :] at every iteration (which would duplicate ~28×
+        # the work across the whole clade loop).
+        notna_out_col = total_notna - notna_in
+        sum_v_out = total_sum_v - sum_v_in
+        sumsq_v_out = total_sumsq_v - sumsq_v_in
+
+        mean_in, sd_in = _mean_std_sample(notna_in, sum_v_in, sumsq_v_in)
+        mean_out, sd_out = _mean_std_sample(notna_out_col, sum_v_out, sumsq_v_out)
+
+        # The following distribution is close to normal in log space, if not
+        # a little skewed. Because it has this property, for each pair we
+        # can measure where it falls in the distribution. If sd_in_out_ratio
+        # is nan, that is because the value does not appear in the out
+        # samples, meaning this is a new feature for this taxid. If
+        # sd_in_out_ratio is 0, this means that the variance was 0 for the
+        # in samples. This probably means that this pair was only measured
+        # twice? So from this number we can rank the pairs based on that
+        # ratio, then filter even more for well-represented pairs. From the
+        # other information we can get the things that do not occur in
+        # other samples, and that have a small SD or a small mean. Those
+        # derived ratios live in the downstream aggregation step
+        # (`defining_features_plot2.py`), not here.
+
+        # Keep only columns that have at least one in-clade observation,
+        # matching the original code's "drop all-NaN-for-this-taxid"
+        # filter (innan_dict → ignore_columns before df.apply).
+        keep = notna_in > 0
+        pairs = np.arange(csr.shape[1], dtype=np.int64)[keep]
+
+        unique_pair_df = pd.DataFrame({
+            "pair": pairs,
+            "notna_in": notna_in[keep].astype(np.int64),
+            "notna_out": notna_out_col[keep].astype(np.int64),
+            "mean_in": mean_in[keep],
+            "sd_in": sd_in[keep],
+            "mean_out": mean_out[keep],
+            "sd_out": sd_out[keep],
+            "occupancy_in": notna_in[keep].astype(np.float64) / n_in,
+            "occupancy_out": (notna_out_col[keep].astype(np.float64)
+                              / n_out),
+        })
+        # save this so we can play with it
+        unique_pair_df.to_csv(outfile, sep="\t", index=False,
+                               compression="gzip")
+        print(f"[{counter}/{len(iterate_taxids)}] {nodename_raw} -- "
+              f"rows={len(unique_pair_df)}  elapsed={time.time() - t1:.1f}s  "
+              f"-> {outfile}")
+
+    # Historical: an empty aggregated unique_pairs.tsv.gz was written
+    # here. The real aggregation (with nodename / ortholog1 / z-score /
+    # close_in_clade / stable_in_clade etc. columns) lives downstream in
+    # defining_features_plot2.py, so we skip this no-op write.
 
 def main(argv=None):
     args = parse_args(argv)
