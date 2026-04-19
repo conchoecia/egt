@@ -30,6 +30,13 @@ def parse_args(argv=None):
     parser.add_argument("--sample_df_path",       type=str, help="Path to the sample df", required=True)
     parser.add_argument("--coo_combination_path", type=str, help="Path to the coo combination file", required=True)
     parser.add_argument("--taxid_list",           type=str, help="Comma-separated list of taxids for which we want to save the unique pairs tsv file", required=False, default = "")
+    # --no-qc-plots suppresses the per-clade QC PDFs that are emitted
+    # alongside each *_unique_pair_df.tsv.gz by default. The automated
+    # downstream tests pass this flag so they don't spend time rendering
+    # matplotlib figures on tiny synthetic fixtures.
+    parser.add_argument("--no-qc-plots", dest="qc_plots", action="store_false",
+                        default=True,
+                        help="Skip the per-clade QC PDF emission.")
 
     args = parser.parse_args(argv)
     # check that both the coo file and the df file exist. Same with coo combination file
@@ -208,7 +215,7 @@ def compute_statistics(col, inindex, outindex):
 
 def process_coo_file(sampledffile, ALGcomboixfile, coofile,
                      dfoutfilepath, missing_value_as = np.nan,
-                     taxid_list = []):
+                     taxid_list = [], qc_plots = True):
     """
     Handles loading in the coo file and transforms it to a matrix that we can work with.
 
@@ -365,6 +372,27 @@ def process_coo_file(sampledffile, ALGcomboixfile, coofile,
               f"rows={len(unique_pair_df)}  elapsed={time.time() - t1:.1f}s  "
               f"-> {outfile}")
 
+        # Per-clade QC plots — ported from dev_scripts/
+        # defining_features_plot2.py on odp's decay-branch. Skipped if
+        # the caller passed --no-qc-plots (qc_plots=False) or if the
+        # per-clade df has no rows left after the keep-mask.
+        if qc_plots and len(unique_pair_df) > 0:
+            try:
+                # Import lazily so that --no-qc-plots runs don't pay the
+                # matplotlib import cost.
+                from egt.defining_features_qc_plots import write_qc_plots
+                qc_pdf = f"{nodename}_{taxid}_unique_pairs_qc.pdf"
+                write_qc_plots(
+                    unique_pair_df, qc_pdf,
+                    nodename=nodename_raw, taxid=taxid,
+                )
+                print(f"    QC plots -> {qc_pdf}")
+            except Exception as exc:
+                # QC plots are advisory — a plotting failure must not
+                # lose the already-written per-clade TSV. Log and move on.
+                print(f"    WARN: QC plot generation failed for "
+                      f"{nodename_raw} ({taxid}): {exc}")
+
     # Historical: an empty aggregated unique_pairs.tsv.gz was written
     # here. The real aggregation (with nodename / ortholog1 / z-score /
     # close_in_clade / stable_in_clade etc. columns) lives downstream in
@@ -376,9 +404,11 @@ def main(argv=None):
     #process_coo_file(sampledffile, ALGcomboixfile, coofile,
     #                 dfoutfilepath, missing_value_as = 9999999999)
     if len(args.taxid_list) > 0:
-        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df", taxid_list = args.taxid_list)
+        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df",
+                         taxid_list = args.taxid_list, qc_plots = args.qc_plots)
     else:
-        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df")
+        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df",
+                         qc_plots = args.qc_plots)
     return 0
 
 if __name__ == "__main__":
