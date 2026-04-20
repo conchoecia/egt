@@ -310,7 +310,7 @@ def draw_dotplot(fig_ax, terms_df, title, vmin, vmax):
             marker=slash,
             s=80 + 20 * ks_above,
             c="red",
-            linewidths=1.4,
+            linewidths=2.8,
             zorder=5,
         )
     fig_ax.set_yticks(ys)
@@ -413,7 +413,7 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
                 # q (not significant, blue) at the bottom.
                 cbar.ax.invert_yaxis()
                 if 0.05 >= vmin and 0.05 <= vmax:
-                    cbar.ax.axhline(0.05, color="red", lw=1.2, ls=":")
+                    cbar.ax.axhline(0.05, color="red", lw=2.4, ls=":")
                     cbar.ax.annotate("0.05",
                                        xy=(1.15, 0.05),
                                        xycoords=("axes fraction", "data"),
