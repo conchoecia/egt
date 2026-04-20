@@ -205,6 +205,25 @@ def test_run_end_to_end_with_real_hits(tmp_path):
     assert (out / "curves.pdf").exists()
 
 
+def test_per_clade_record_has_universal_and_raw_columns():
+    """sweep_clade records now carry `background_size_[N]` on every row
+    (constant = annotatable-background size, by design) and
+    `foreground_raw_geneids` alongside the hypergeometric `n`."""
+    df, fam, bg, ns = _planted_fixture()
+    records, _ = sweep_mod.sweep_clade(df, fam, bg, ns)
+    assert records
+    r = records[0]
+    # N = len(background_to_terms). Build that ourselves to cross-check.
+    expected_N = len(bg)
+    assert r["background_size_[N]"] == expected_N
+    # Every record carries the same N by design.
+    assert {rec["background_size_[N]"] for rec in records} == {expected_N}
+    # foreground_raw_geneids is independent of the hypergeometric n but
+    # equal when every foreground family carries ≥1 GO annotation (as
+    # in this fixture, where every family maps to one annotated gene).
+    assert r["foreground_raw_geneids"] >= r["foreground_size_[n]"]
+
+
 def test_sweep_clade_empty_intersection_branch():
     # Clade where sorted-by-stability and sorted-by-closeness disagree
     # enough that small-N intersection is empty.
