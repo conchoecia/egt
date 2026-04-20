@@ -278,12 +278,18 @@ def draw_dotplot(fig_ax, terms_df, title, vmin, vmax):
         fig_ax.set_yticks([])
         return None
     import matplotlib.colors as mcolors
+    # Colour map fixed to the enrichplot muted red → blue pair (Yu 2012,
+    # 2024): most-significant q at #DF6663 (red), least-significant at
+    # #327EB9 (blue). Low q → first colour in the list = red.
+    ENRICHPLOT_CMAP = mcolors.LinearSegmentedColormap.from_list(
+        "enrichplot_rdbu", ["#DF6663", "#327EB9"]
+    )
     ys = np.arange(len(terms_df))[::-1]  # most-significant at top
     sc = fig_ax.scatter(
         terms_df["log2fold"], ys,
         s=40 + 10 * terms_df["k"].clip(upper=50),
         c=terms_df["q_plot"],
-        cmap="RdBu",                 # low q → red, high q → blue
+        cmap=ENRICHPLOT_CMAP,
         norm=mcolors.LogNorm(vmin=vmin, vmax=vmax),
         edgecolors="#333", linewidths=0.4,
     )
@@ -384,6 +390,10 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
                     LogFormatterSciNotation()
                 )
                 cbar.ax.tick_params(labelsize=7)
+                # enrichplot's guide_colorbar(reverse=TRUE): small q
+                # (significant, red) at the TOP of the colorbar, large
+                # q (not significant, blue) at the bottom.
+                cbar.ax.invert_yaxis()
                 if 0.05 >= vmin and 0.05 <= vmax:
                     cbar.ax.axhline(0.05, color="red", lw=1.2, ls=":")
                     cbar.ax.annotate("0.05",
