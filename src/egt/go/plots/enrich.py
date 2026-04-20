@@ -264,13 +264,17 @@ def parse_obo(path):
 def draw_dotplot(fig_ax, terms_df, title, vmin, vmax):
     """Draw one dotplot on an existing matplotlib Axes.
 
-    terms_df: columns ['go_name', 'log2fold', 'q_plot', 'k'] sorted by
-    q ascending (most significant at top of y-axis).
+    terms_df: columns ['go_name', 'gene_ratio', 'q_plot', 'q', 'k'] sorted
+    by q ascending (most significant at top of y-axis).
 
-    Color convention matches clusterProfiler/enrichplot (Yu 2012, 2024):
-    low q-value = red, high q-value = blue, log-scaled so a range from
-    1e-20 to 1 is legible. `vmin`/`vmax` are supplied by the caller so
-    every panel on a figure shares the same colour scale.
+    x-axis: GeneRatio = k/n (clusterProfiler/enrichplot convention —
+    fraction of the foreground gene set annotated to the term).
+    Colour: raw q on a LogNorm ``#DF6663 → #327EB9`` scale (Yu 2012,
+    2024). `vmin`/`vmax` are supplied by the caller so every panel on a
+    figure shares the same colour range.
+    Dots whose q > 0.05 are overlaid with a dotted red diagonal
+    slash, matching the style of the 0.05 reference line on the
+    colorbar — a visual "did-not-clear-threshold" indicator.
     """
     if terms_df.empty:
         fig_ax.set_title(title + "  (no hits)", fontsize=9)
@@ -278,29 +282,43 @@ def draw_dotplot(fig_ax, terms_df, title, vmin, vmax):
         fig_ax.set_yticks([])
         return None
     import matplotlib.colors as mcolors
-    # Colour map fixed to the enrichplot muted red → blue pair (Yu 2012,
-    # 2024): most-significant q at #DF6663 (red), least-significant at
-    # #327EB9 (blue). Low q → first colour in the list = red.
+    from matplotlib.markers import MarkerStyle
+    from matplotlib.transforms import Affine2D
     ENRICHPLOT_CMAP = mcolors.LinearSegmentedColormap.from_list(
         "enrichplot_rdbu", ["#DF6663", "#327EB9"]
     )
     ys = np.arange(len(terms_df))[::-1]  # most-significant at top
     sc = fig_ax.scatter(
-        terms_df["log2fold"], ys,
+        terms_df["gene_ratio"], ys,
         s=40 + 10 * terms_df["k"].clip(upper=50),
         c=terms_df["q_plot"],
         cmap=ENRICHPLOT_CMAP,
         norm=mcolors.LogNorm(vmin=vmin, vmax=vmax),
         edgecolors="#333", linewidths=0.4,
     )
+    # Diagonal-slash strike-through for q > 0.05. MarkerStyle of a
+    # horizontal bar rotated -45° gives a single forward slash. Size is
+    # yoked to the same 40 + 10·k sizing law as the underlying dot so
+    # the slash covers it visually without spilling into neighbours.
+    above = terms_df["q"] > 0.05
+    if above.any():
+        slash = MarkerStyle("_", transform=Affine2D().rotate_deg(-45))
+        ks_above = terms_df.loc[above, "k"].clip(upper=50)
+        fig_ax.scatter(
+            terms_df.loc[above, "gene_ratio"],
+            np.asarray(ys)[above.to_numpy()],
+            marker=slash,
+            s=80 + 20 * ks_above,
+            c="red",
+            linewidths=1.4,
+            zorder=5,
+        )
     fig_ax.set_yticks(ys)
     fig_ax.set_yticklabels(
         [f"{n[:56]}" + ("…" if len(n) > 56 else "")
          for n in terms_df["go_name"]],
         fontsize=7)
-    fig_ax.axvline(math.log2(3), ls=":", color="gray", lw=0.5)
-    fig_ax.axvline(0, color="black", lw=0.3, alpha=0.3)
-    fig_ax.set_xlabel("log2 fold-enrichment", fontsize=8)
+    fig_ax.set_xlabel("GeneRatio (k/n)", fontsize=8)
     fig_ax.set_title(title, fontsize=9)
     fig_ax.grid(axis="x", alpha=0.15)
     return sc
@@ -332,15 +350,15 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
                 continue
             best = (sub.sort_values("q")
                        .drop_duplicates(subset=["go_id"]))
-            best["log2fold"] = best["fold"].map(
-                lambda f: math.log2(f) if f and f > 0 and math.isfinite(f) else float("nan"))
+            # GeneRatio = k/n (clusterProfiler convention, Yu 2012/2024).
+            best["gene_ratio"] = best["k"] / best["n"]
             # Clip q=0 to a small floor so LogNorm stays finite; the raw
             # q is shown on the colorbar directly (scientific notation).
             Q_FLOOR = 1e-20
             best["q_plot"] = best["q"].map(
                 lambda q: max(q, Q_FLOOR) if q is not None and q >= 0
                 else float("nan"))
-            best = best.dropna(subset=["log2fold", "q_plot"])
+            best = best.dropna(subset=["gene_ratio", "q_plot"])
 
             # Shared color scale across all three namespace panels so
             # same raw q-value → same colour in every subplot.
@@ -349,7 +367,7 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
             for ns in ("BP", "MF", "CC"):
                 s = best[best["go_namespace"] == ns]
                 s = s.sort_values("q").head(top_n)
-                s = s.sort_values("log2fold", ascending=False)
+                s = s.sort_values("gene_ratio", ascending=False)
                 ns_subs[ns] = s
                 panel_qs.extend(s["q_plot"].tolist())
             if panel_qs:
