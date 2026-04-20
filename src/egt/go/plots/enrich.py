@@ -293,18 +293,25 @@ def draw_dotplot(fig_ax, terms_df, title):
     return sc
 
 
-def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0):
+def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
     """Per clade, three subplots (BP/MF/CC), each showing top-N terms.
 
     Applies a fold-enrichment gate BEFORE per-term deduplication so the
     large-N hypergeometric artifact (broad terms like GO:0005829 flipping
     to q~1e-5 at fold~1.1 when the foreground approaches N/2) doesn't
     overwrite the real narrow-N signal.
+
+    `min_k` (optional) additionally drops cells with fewer than `min_k`
+    foreground families contributing — useful for producing the k ≥ 3
+    and k ≥ 4 companion panels that remove k = 2 singletons (where fold
+    magnitude is known to be fragile).
     """
     clades = sorted(sig_df["clade"].dropna().unique())
     # Gate: only keep cells whose fold is high enough to be biologically
     # meaningful. Dedupe afterward.
     gated = sig_df[sig_df["fold"] >= min_fold]
+    if min_k is not None:
+        gated = gated[gated["k"] >= min_k]
     with PdfPages(out_path) as pdf:
         for clade in clades:
             sub = gated[gated["clade"] == clade].copy()
@@ -333,8 +340,9 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0):
                 if sc is not None:
                     mappables.append(sc)
                     per_ns_sizes.extend(s["k"].tolist())
+            k_tag = (f", k ≥ {min_k}" if min_k is not None else "")
             fig.suptitle(f"{clade} — top GO enrichments per namespace  "
-                          f"(fold ≥ {min_fold:g}×)",
+                          f"(fold ≥ {min_fold:g}×{k_tag})",
                           fontsize=11, y=1.01)
             # Right-side colorbar for -log10(q).
             if mappables:
@@ -363,7 +371,8 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0):
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
     print(f"[write] {out_path}  clades={len(clades)}  top_n_per_ns={top_n}  "
-          f"fold_gate={min_fold:g}")
+          f"fold_gate={min_fold:g}"
+          + (f"  k_gate={min_k}" if min_k is not None else ""))
 
 
 # ---------------------------------------------------------------------
@@ -1150,8 +1159,14 @@ def main(argv: list[str] | None = None) -> int:
     sig.to_csv(annotated_path, sep="\t", index=False)
     print(f"[write] {annotated_path}  rows={len(sig)}")
 
-    make_dotplots(sig, out_dir / "dotplots.pdf", top_n=args.top_n,
-                   min_fold=args.min_fold)
+    # Three dotplot variants at successively more stringent k floors.
+    # The k = 2 panel shows everything; k ≥ 3 / k ≥ 4 reviewer-facing
+    # companions suppress the fragile k = 2 fold-magnitude hits.
+    for k_floor, name in [(None, "dotplots.pdf"),
+                           (3, "dotplots_kge3.pdf"),
+                           (4, "dotplots_kge4.pdf")]:
+        make_dotplots(sig, out_dir / name, top_n=args.top_n,
+                       min_fold=args.min_fold, min_k=k_floor)
     # Three heatmap variants: top-25, top-50, top-N (CLI default). All
     # same rules, different caps.
     for cap, name in [(25, "heatmap_top25.pdf"),
