@@ -101,20 +101,24 @@ def test_volcano_run_axis_without_matching_rows(tmp_path):
     # and hits the `if col == 0: ax.set_ylabel(...)` branch (line 50).
     # Clade Z is filtered entirely to cover the `sub.empty continue`
     # branch (line 98).
-    rows = [
-        dict(clade="X", axis="stability", N_threshold=10,
-             sweep_namespace="all", go_id="GO:1", go_namespace="BP",
-             k=5, K=10, n=20, N=100, fold=5.0, p=1e-5, q=1e-4),
-        dict(clade="Y", axis="closeness", N_threshold=10,
-             sweep_namespace="all", go_id="GO:2", go_namespace="MF",
-             k=4, K=8, n=20, N=100, fold=4.0, p=1e-4, q=1e-3),
-        # Non-"all" sweep_namespace — dropped during the initial filter
-        # so Z yields an empty `sub` in the outer loop.
-        dict(clade="Z", axis="stability", N_threshold=10,
-             sweep_namespace="BP", go_id="GO:3", go_namespace="BP",
-             k=2, K=5, n=20, N=100, fold=2.0, p=0.1, q=0.2),
-    ]
-    df = pd.DataFrame(rows)
+    def _r(clade, axis, ns, go, g_ns, k, K, n, N, fold, p, q):
+        return {
+            "clade": clade, "axis": axis, "N_threshold": 10,
+            "sweep_namespace": ns, "go_id": go,
+            "go_name": "", "go_namespace": g_ns,
+            "foreground_hits_[k]": k, "foreground_size_[n]": n,
+            "background_hits_[K]": K, "background_size_[N]": N,
+            "ratio_in_study_[k/n]": f"{k}/{n}",
+            "ratio_in_pop_[K/N]": f"{K}/{N}",
+            "fold_enrichment": fold, "p_value": p,
+            "correction_method": "fdr_bh", "q_value": q,
+            "gene_ids": "", "gene_symbols": "",
+        }
+    df = pd.DataFrame([
+        _r("X", "stability", "all", "GO:1", "BP", 5, 10, 20, 100, 5.0, 1e-5, 1e-4),
+        _r("Y", "closeness", "all", "GO:2", "MF", 4, 8, 20, 100, 4.0, 1e-4, 1e-3),
+        _r("Z", "stability", "BP", "GO:3", "BP", 2, 5, 20, 100, 2.0, 0.1, 0.2),
+    ])
     sig = tmp_path / "sig.tsv"
     df.to_csv(sig, sep="\t", index=False)
     out = tmp_path / "v.pdf"

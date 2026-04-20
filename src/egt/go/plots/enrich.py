@@ -1129,7 +1129,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  terms_in_obo={len(term_info)}")
 
     print("[load] significant_terms …")
-    sig = pd.read_csv(args.significant_terms, sep="\t")
+    from ..io import load_significant_terms
+    sig = load_significant_terms(args.significant_terms)
     print(f"  rows={len(sig)}")
 
     # Annotate with name + authoritative namespace from OBO.

@@ -187,6 +187,32 @@ def load_obo_names(path) -> tuple[dict[str, str], dict[str, str]]:
     return names, ns
 
 
+# On-disk `significant_terms.tsv` carries the publication-standard
+# canonical column set (k/n/K/N annotated with single-letter brackets so
+# the hypergeometric parametrisation is unambiguous for human readers).
+# Internal consumers in egt.go (plots, benchmarks) were written against
+# the short forms; this alias map lets each loader re-expose the short
+# names without losing the canonical on-disk schema.
+SIGNIFICANT_TERMS_SHORT_ALIASES: dict[str, str] = {
+    "foreground_hits_[k]": "k",
+    "foreground_size_[n]": "n",
+    "background_hits_[K]": "K",
+    "background_size_[N]": "N",
+    "ratio_in_study_[k/n]": "ratio_in_study",
+    "ratio_in_pop_[K/N]": "ratio_in_pop",
+    "fold_enrichment": "fold",
+    "p_value": "p",
+    "q_value": "q",
+}
+
+
+def load_significant_terms(path) -> pd.DataFrame:
+    """Read significant_terms.tsv and alias the canonical column names
+    to the short single-letter forms used by the egt.go plotters."""
+    df = pd.read_csv(path, sep="\t")
+    return df.rename(columns=SIGNIFICANT_TERMS_SHORT_ALIASES)
+
+
 def load_unique_pairs(path) -> pd.DataFrame:
     """Load a defining-pair table (.xlsx or TSV / TSV.gz) into a DataFrame.
 

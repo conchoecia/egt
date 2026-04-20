@@ -208,20 +208,27 @@ def harvest_significant_terms(
                     hit_symbols = [gene_to_symbol.get(g, g) for g in hit_genes]
                     k_val = int(rr["k"]); n_val = int(rr["n"])
                     K_val = int(rr["K"]); N_val = int(rr["N"])
-                    out.append(dict(
-                        clade=clade, axis=axis, N_threshold=N,
-                        sweep_namespace=ns,
-                        go_id=rr["go_id"],
-                        go_name=go_names.get(rr["go_id"], ""),
-                        go_namespace=rr["term_namespace"],
-                        k=k_val, n=n_val, K=K_val, N=N_val,
-                        ratio_in_study=f"{k_val}/{n_val}",
-                        ratio_in_pop=f"{K_val}/{N_val}",
-                        fold=rr["fold"], p=rr["p"],
-                        correction_method="fdr_bh", q=rr["q"],
-                        gene_ids=";".join(hit_genes),
-                        gene_symbols=";".join(hit_symbols),
-                    ))
+                    out.append({
+                        "clade": clade,
+                        "axis": axis,
+                        "N_threshold": N,
+                        "sweep_namespace": ns,
+                        "go_id": rr["go_id"],
+                        "go_name": go_names.get(rr["go_id"], ""),
+                        "go_namespace": rr["term_namespace"],
+                        "foreground_hits_[k]": k_val,
+                        "foreground_size_[n]": n_val,
+                        "background_hits_[K]": K_val,
+                        "background_size_[N]": N_val,
+                        "ratio_in_study_[k/n]": f"{k_val}/{n_val}",
+                        "ratio_in_pop_[K/N]": f"{K_val}/{N_val}",
+                        "fold_enrichment": rr["fold"],
+                        "p_value": rr["p"],
+                        "correction_method": "fdr_bh",
+                        "q_value": rr["q"],
+                        "gene_ids": ";".join(hit_genes),
+                        "gene_symbols": ";".join(hit_symbols),
+                    })
                     if rr["go_id"] in seen_terms_this_cell:
                         continue
                     seen_terms_this_cell.add(rr["go_id"])
@@ -291,19 +298,24 @@ def run(
 
     Emits a `significant_terms.tsv` with one row per (clade, axis, N,
     sweep_namespace, go_id) enriched term, following the publication-
-    standard GO-enrichment schema:
+    standard GO-enrichment schema. Column names carry the mnemonic
+    single-letter parameter in brackets so the hypergeometric
+    parametrisation is unambiguous on first read:
 
       clade, axis, N_threshold, sweep_namespace,
       go_id, go_name, go_namespace,
-      k, n, K, N,                  # foreground/background counts
-      ratio_in_study (k/n),        # string "k/n"
-      ratio_in_pop (K/N),          # string "K/N"
-      fold,                        # (k/n) / (K/N)
-      p,                           # raw hypergeometric upper-tail
-      correction_method,           # "fdr_bh"
-      q,                           # BH-adjusted p-value
-      gene_ids,                    # ";"-joined Entrez GeneIDs driving k
-      gene_symbols                 # ";"-joined HGNC symbols (same order)
+      foreground_hits_[k],     # k — term hits among the foreground
+      foreground_size_[n],     # n — foreground gene set size
+      background_hits_[K],     # K — term hits among the background
+      background_size_[N],     # N — annotatable background size
+      ratio_in_study_[k/n],    # string "k/n" (verbatim k over n)
+      ratio_in_pop_[K/N],      # string "K/N"
+      fold_enrichment,         # (k/n) / (K/N)
+      p_value,                 # raw hypergeometric upper-tail
+      correction_method,       # constant "fdr_bh" per row
+      q_value,                 # BH-adjusted p-value
+      gene_ids,                # ';'-joined Entrez GeneIDs driving k
+      gene_symbols             # ';'-joined HGNC symbols (same order)
 
     When `obo` is supplied the `go_name` column is populated from the
     ontology file; otherwise it is empty. The `gene_symbols` column is
@@ -391,16 +403,18 @@ def run(
     sig_cols = [
         "clade", "axis", "N_threshold", "sweep_namespace",
         "go_id", "go_name", "go_namespace",
-        "k", "n", "K", "N",
-        "ratio_in_study", "ratio_in_pop",
-        "fold", "p", "correction_method", "q",
+        "foreground_hits_[k]", "foreground_size_[n]",
+        "background_hits_[K]", "background_size_[N]",
+        "ratio_in_study_[k/n]", "ratio_in_pop_[K/N]",
+        "fold_enrichment",
+        "p_value", "correction_method", "q_value",
         "gene_ids", "gene_symbols",
     ]
     if all_significant:
         sig_df = pd.DataFrame(all_significant).drop_duplicates(
             subset=["clade", "axis", "N_threshold",
                     "sweep_namespace", "go_id"]
-        ).sort_values(["clade", "q"])
+        ).sort_values(["clade", "q_value"])
         # Emit in the canonical column order so downstream consumers
         # don't depend on dict-iteration order.
         sig_df = sig_df[[c for c in sig_cols if c in sig_df.columns]]

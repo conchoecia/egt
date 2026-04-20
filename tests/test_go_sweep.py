@@ -161,9 +161,11 @@ def test_run_end_to_end_writes_expected_files(tmp_path, loaded_refs):
     sig = pd.read_csv(tmp_path / "significant_terms.tsv", sep="\t")
     expected = ["clade", "axis", "N_threshold", "sweep_namespace",
                 "go_id", "go_name", "go_namespace",
-                "k", "n", "K", "N",
-                "ratio_in_study", "ratio_in_pop",
-                "fold", "p", "correction_method", "q",
+                "foreground_hits_[k]", "foreground_size_[n]",
+                "background_hits_[K]", "background_size_[N]",
+                "ratio_in_study_[k/n]", "ratio_in_pop_[K/N]",
+                "fold_enrichment", "p_value",
+                "correction_method", "q_value",
                 "gene_ids", "gene_symbols"]
     assert list(sig.columns) == expected
 

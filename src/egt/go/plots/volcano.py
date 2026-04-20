@@ -77,7 +77,8 @@ def _clade_panel(ax, sub: pd.DataFrame, clade: str, axis: str, col: int) -> None
 
 
 def run(significant_terms_path, out_path, min_fold: float | None = None) -> None:
-    df = pd.read_csv(significant_terms_path, sep="\t")
+    from ..io import load_significant_terms
+    df = load_significant_terms(significant_terms_path)
     df = df[df["sweep_namespace"] == "all"].copy()
     df = df.sort_values("q").drop_duplicates(
         subset=["clade", "axis", "go_id"], keep="first"

@@ -145,11 +145,17 @@ def test_volcano_log_helpers_edges():
     # Directly construct a df with only axis="stability" for one clade, then
     # let volcano.run iterate through closeness/intersection axes (empty).
     import pandas as pd
-    df = pd.DataFrame([
-        dict(clade="X", axis="stability", N_threshold=10,
-             sweep_namespace="all", go_id="GO:1", go_namespace="BP",
-             k=5, K=10, n=20, N=100, fold=5.0, p=1e-5, q=1e-4),
-    ])
+    df = pd.DataFrame([{
+        "clade": "X", "axis": "stability", "N_threshold": 10,
+        "sweep_namespace": "all", "go_id": "GO:1",
+        "go_name": "", "go_namespace": "BP",
+        "foreground_hits_[k]": 5, "foreground_size_[n]": 20,
+        "background_hits_[K]": 10, "background_size_[N]": 100,
+        "ratio_in_study_[k/n]": "5/20", "ratio_in_pop_[K/N]": "10/100",
+        "fold_enrichment": 5.0, "p_value": 1e-5,
+        "correction_method": "fdr_bh", "q_value": 1e-4,
+        "gene_ids": "", "gene_symbols": "",
+    }])
     sig_path = Path("/tmp/voltest_sig.tsv")
     df.to_csv(sig_path, sep="\t", index=False)
     out = Path("/tmp/voltest_out.pdf")

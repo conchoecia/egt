@@ -126,11 +126,14 @@ def test_run_standard_columns_with_obo_and_symbols(tmp_path):
         write_curves=False, verbose=False,
     )
     sig = pd.read_csv(out / "significant_terms.tsv", sep="\t")
-    # Every enrichment-standard column present in the canonical order.
+    # Every enrichment-standard column present in the canonical order
+    # (brackets make the hypergeometric parameter names unambiguous).
     required = ["go_id", "go_name", "go_namespace",
-                "k", "n", "K", "N",
-                "ratio_in_study", "ratio_in_pop",
-                "fold", "p", "correction_method", "q",
+                "foreground_hits_[k]", "foreground_size_[n]",
+                "background_hits_[K]", "background_size_[N]",
+                "ratio_in_study_[k/n]", "ratio_in_pop_[K/N]",
+                "fold_enrichment", "p_value",
+                "correction_method", "q_value",
                 "gene_ids", "gene_symbols"]
     assert all(c in sig.columns for c in required)
     # go_name populated from OBO.
@@ -138,14 +141,18 @@ def test_run_standard_columns_with_obo_and_symbols(tmp_path):
     assert (planted["go_name"] == "planted-process").all()
     # ratio_in_study strings are well-formed "k/n".
     r = planted.iloc[0]
-    assert r["ratio_in_study"] == f"{r['k']}/{r['n']}"
-    assert r["ratio_in_pop"] == f"{r['K']}/{r['N']}"
-    # Correction method label is stable.
+    k = r["foreground_hits_[k]"]
+    n = r["foreground_size_[n]"]
+    K = r["background_hits_[K]"]
+    N = r["background_size_[N]"]
+    assert r["ratio_in_study_[k/n]"] == f"{k}/{n}"
+    assert r["ratio_in_pop_[K/N]"] == f"{K}/{N}"
+    # Correction method label is stable and set per row.
     assert (sig["correction_method"] == "fdr_bh").all()
     # gene_ids + gene_symbols populated, same length.
     ids = r["gene_ids"].split(";")
     syms = r["gene_symbols"].split(";")
-    assert len(ids) == len(syms) == r["k"]
+    assert len(ids) == len(syms) == k
     # Symbols follow the SYM{i} pattern from the fixture.
     for s in syms:
         assert s.startswith("SYM")

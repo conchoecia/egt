@@ -164,7 +164,8 @@ def pair_coenrich_for_clade(
 def _compare_to_bag(
     summ_co: pd.DataFrame, sig_path: Path, out_dir: Path
 ) -> Path:
-    sig = pd.read_csv(sig_path, sep="\t")
+    from .io import load_significant_terms
+    sig = load_significant_terms(sig_path)
     sig = sig[sig["sweep_namespace"] == "all"]
     merged = summ_co.merge(
         sig[["clade", "axis", "N_threshold", "go_id", "q", "fold"]].rename(

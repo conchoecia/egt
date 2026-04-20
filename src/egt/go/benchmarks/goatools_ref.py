@@ -355,7 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     best_cells = best_sweep_cell_per_clade(args.summary)
 
     print("[load] significant_terms ...")
-    sig = pd.read_csv(args.significant, sep="\t")
+    from ..io import load_significant_terms
+    sig = load_significant_terms(args.significant)
 
     summary_rows = []
     scatter_pts = []  # (clade, log10q_ours, log10q_theirs)

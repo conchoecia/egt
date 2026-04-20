@@ -49,13 +49,23 @@ def sweep_outputs(tmp_path_factory) -> Path:
                 ("GO:0000021", "MF", "function-two"),
                 ("GO:0000004", "CC", "component-one"),
             ]):
-                synth_rows.append(dict(
-                    clade=clade, axis=axis, N_threshold=10,
-                    sweep_namespace="all", go_id=go_id, go_namespace=ns,
-                    k=5 + i, K=10 + i, n=20, N=100,
-                    fold=5.0 - 0.3 * i,
-                    p=1e-5 / (i + 1), q=1e-4 / (i + 1),
-                ))
+                synth_rows.append({
+                    "clade": clade, "axis": axis, "N_threshold": 10,
+                    "sweep_namespace": "all",
+                    "go_id": go_id, "go_name": name, "go_namespace": ns,
+                    "foreground_hits_[k]": 5 + i,
+                    "foreground_size_[n]": 20,
+                    "background_hits_[K]": 10 + i,
+                    "background_size_[N]": 100,
+                    "ratio_in_study_[k/n]": f"{5+i}/20",
+                    "ratio_in_pop_[K/N]": f"{10+i}/100",
+                    "fold_enrichment": 5.0 - 0.3 * i,
+                    "p_value": 1e-5 / (i + 1),
+                    "correction_method": "fdr_bh",
+                    "q_value": 1e-4 / (i + 1),
+                    "gene_ids": ";".join(f"{1000+j}" for j in range(3)),
+                    "gene_symbols": ";".join(f"GENE{j}" for j in range(3)),
+                })
                 gene_lists_rows.append(dict(
                     clade=clade, axis=axis, N_threshold=10, go_id=go_id,
                     k=5 + i,
