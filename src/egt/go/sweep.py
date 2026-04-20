@@ -151,12 +151,19 @@ def harvest_significant_terms(
     fam_to_genes: Mapping[str, set[str]],
     background_to_terms: Mapping[str, set[str]],
     term_namespace: Mapping[str, str],
+    go_names: Mapping[str, str] | None = None,
+    gene_to_symbol: Mapping[str, str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """For every (axis, N) cell that produced q25 hits, emit every term.
 
-    Also emits the foreground-GeneID side-car table keyed on
-    (clade, axis, N, go_id) — used downstream by the plot builders that
-    need term-overlap statistics.
+    Each emitted row follows the publication-standard GO-enrichment
+    schema (see docs of `run()`): go_id, go_name, namespace, k, n, K, N,
+    ratio_in_study, ratio_in_pop, fold, p, correction_method, q, and the
+    inline gene_ids (semicolon-joined) + gene_symbols (if a gene→symbol
+    map is supplied).
+
+    Also emits a compact (clade, axis, N, go_id) → gene_ids side-car
+    list used downstream by the Jaccard-based plot builders.
     """
     out: list[dict] = []
     gene_lists: list[dict] = []
@@ -164,6 +171,8 @@ def harvest_significant_terms(
     if df.empty:
         return out, gene_lists
     stab, close = _axis_orders(df)
+    go_names = go_names or {}
+    gene_to_symbol = gene_to_symbol or {}
 
     for axis in ("stability", "closeness", "intersection"):
         cells = sorted({
@@ -189,25 +198,37 @@ def harvest_significant_terms(
                 for rr in rows:
                     if rr["q"] > 0.25:
                         continue
-                    out.append(dict(
-                        clade=clade, axis=axis, N_threshold=N,
-                        sweep_namespace=ns,
-                        go_id=rr["go_id"],
-                        go_namespace=rr["term_namespace"],
-                        k=rr["k"], K=rr["K"], n=rr["n"], N=rr["N"],
-                        fold=rr["fold"], p=rr["p"], q=rr["q"],
-                    ))
-                    if rr["go_id"] in seen_terms_this_cell:
-                        continue
-                    seen_terms_this_cell.add(rr["go_id"])
+                    # Compute the gene set contributing to this term's
+                    # hit count once per (axis, N, go_id) (it's identical
+                    # across sweep namespaces at the same cell).
                     hit_genes = sorted(
                         g for g in fg_in_bg
                         if rr["go_id"] in background_to_terms[g]
                     )
+                    hit_symbols = [gene_to_symbol.get(g, g) for g in hit_genes]
+                    k_val = int(rr["k"]); n_val = int(rr["n"])
+                    K_val = int(rr["K"]); N_val = int(rr["N"])
+                    out.append(dict(
+                        clade=clade, axis=axis, N_threshold=N,
+                        sweep_namespace=ns,
+                        go_id=rr["go_id"],
+                        go_name=go_names.get(rr["go_id"], ""),
+                        go_namespace=rr["term_namespace"],
+                        k=k_val, n=n_val, K=K_val, N=N_val,
+                        ratio_in_study=f"{k_val}/{n_val}",
+                        ratio_in_pop=f"{K_val}/{N_val}",
+                        fold=rr["fold"], p=rr["p"],
+                        correction_method="fdr_bh", q=rr["q"],
+                        gene_ids=";".join(hit_genes),
+                        gene_symbols=";".join(hit_symbols),
+                    ))
+                    if rr["go_id"] in seen_terms_this_cell:
+                        continue
+                    seen_terms_this_cell.add(rr["go_id"])
                     gene_lists.append(dict(
                         clade=clade, axis=axis, N_threshold=N,
                         go_id=rr["go_id"],
-                        k=rr["k"],
+                        k=k_val,
                         gene_ids=",".join(hit_genes),
                     ))
     return out, gene_lists
@@ -262,13 +283,33 @@ def run(
     gene2accession,
     gene2go,
     out_dir,
+    obo=None,
     write_curves: bool = True,
     verbose: bool = True,
 ) -> Path:
     """End-to-end driver. Writes all sweep outputs under `out_dir`.
 
-    Returns the Path of `summary.tsv` (or the intended path if no
-    records were written — kept for callers that want a handle).
+    Emits a `significant_terms.tsv` with one row per (clade, axis, N,
+    sweep_namespace, go_id) enriched term, following the publication-
+    standard GO-enrichment schema:
+
+      clade, axis, N_threshold, sweep_namespace,
+      go_id, go_name, go_namespace,
+      k, n, K, N,                  # foreground/background counts
+      ratio_in_study (k/n),        # string "k/n"
+      ratio_in_pop (K/N),          # string "K/N"
+      fold,                        # (k/n) / (K/N)
+      p,                           # raw hypergeometric upper-tail
+      correction_method,           # "fdr_bh"
+      q,                           # BH-adjusted p-value
+      gene_ids,                    # ";"-joined Entrez GeneIDs driving k
+      gene_symbols                 # ";"-joined HGNC symbols (same order)
+
+    When `obo` is supplied the `go_name` column is populated from the
+    ontology file; otherwise it is empty. The `gene_symbols` column is
+    populated from the NCBI `gene2accession` Symbol side-map.
+
+    Returns the Path of `summary.tsv`.
     """
     out = Path(out_dir)
     (out / "per_clade").mkdir(parents=True, exist_ok=True)
@@ -294,6 +335,15 @@ def run(
     gene_to_terms_all, term_namespace = parse_gene2go(gene2go)
     _log(f"  GeneIDs-with-GO={len(gene_to_terms_all)}  "
          f"terms-in-namespace-map={len(term_namespace)}")
+
+    go_names: dict[str, str] = {}
+    if obo:
+        _log(f"[load] OBO: {obo}")
+        from .io import load_obo_names
+        go_names, obo_ns = load_obo_names(obo)
+        # Prefer OBO namespace where provided (authoritative).
+        term_namespace = {**term_namespace, **obo_ns}
+        _log(f"  OBO terms with name: {len(go_names)}")
 
     background_gene_ids, background_to_terms = build_family_gene_annotations(
         fam_to_genes, gene_to_terms_all
@@ -324,6 +374,8 @@ def run(
         sig_rows, gene_rows = harvest_significant_terms(
             clade, sub, records, fam_to_genes,
             background_to_terms, term_namespace,
+            go_names=go_names,
+            gene_to_symbol=gene_to_symbol,
         )
         all_significant.extend(sig_rows)
         all_gene_lists.extend(gene_rows)
@@ -336,14 +388,22 @@ def run(
         sdf.to_csv(summary_path, sep="\t", index=False)
         _log(f"[write] summary.tsv rows={len(sdf)}")
 
-    sig_cols = ["clade", "axis", "N_threshold", "sweep_namespace",
-                "go_id", "go_namespace", "k", "K", "n", "N",
-                "fold", "p", "q"]
+    sig_cols = [
+        "clade", "axis", "N_threshold", "sweep_namespace",
+        "go_id", "go_name", "go_namespace",
+        "k", "n", "K", "N",
+        "ratio_in_study", "ratio_in_pop",
+        "fold", "p", "correction_method", "q",
+        "gene_ids", "gene_symbols",
+    ]
     if all_significant:
         sig_df = pd.DataFrame(all_significant).drop_duplicates(
             subset=["clade", "axis", "N_threshold",
                     "sweep_namespace", "go_id"]
         ).sort_values(["clade", "q"])
+        # Emit in the canonical column order so downstream consumers
+        # don't depend on dict-iteration order.
+        sig_df = sig_df[[c for c in sig_cols if c in sig_df.columns]]
         sig_df.to_csv(out / "significant_terms.tsv",
                       sep="\t", index=False)
         _log(f"[write] significant_terms.tsv rows={len(sig_df)}")
@@ -391,6 +451,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--family-map", required=True)
     ap.add_argument("--gene2accession", required=True)
     ap.add_argument("--gene2go", required=True)
+    ap.add_argument("--obo", default=None,
+                    help="go-basic.obo; populates go_name in the output "
+                         "(optional but recommended)")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--no-curves", action="store_true",
                     help="skip the curves.pdf figure")
@@ -401,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
         gene2accession=args.gene2accession,
         gene2go=args.gene2go,
         out_dir=args.out_dir,
+        obo=args.obo,
         write_curves=not args.no_curves,
     )
     return 0

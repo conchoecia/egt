@@ -72,6 +72,85 @@ def test_harvest_significant_terms_emits_rows():
     assert "GO:PLANTED" in ids
 
 
+def test_run_standard_columns_with_obo_and_symbols(tmp_path):
+    """`significant_terms.tsv` must carry the publication-standard
+    columns and be populated from the OBO + NCBI Symbol side-map."""
+    import itertools
+    from egt.go import sweep as sweep_mod
+    # Reuse the planted fixture.
+    planted_fams = [f"fam{i}" for i in range(8)]
+    rows = []
+    for i, (f1, f2) in enumerate(
+        list(itertools.combinations(planted_fams, 2))[:15]
+    ):
+        rows.append(dict(nodename="X", ortholog1=f1, ortholog2=f2,
+                         occupancy_in=0.9,
+                         sd_in_out_ratio_log_sigma=-5.0 + 0.1 * i,
+                         mean_in_out_ratio_log_sigma=-5.0 + 0.1 * i))
+    for j in range(5):
+        rows.append(dict(nodename="X",
+                         ortholog1=f"fam{20+j}", ortholog2=f"fam{40+j}",
+                         occupancy_in=0.9,
+                         sd_in_out_ratio_log_sigma=2.0 + j,
+                         mean_in_out_ratio_log_sigma=2.0 + j))
+    up = tmp_path / "up.tsv"
+    pd.DataFrame(rows).to_csv(up, sep="\t", index=False)
+    g2a = tmp_path / "g2a.tsv"
+    with g2a.open("w") as fh:
+        fh.write("#tax\tGeneID\ts\tR\trg\tpa.v\tpg\tgn\tgg\ts0\te0\to\ta\tmp\tmg\tSymbol\n")
+        for i in range(200):
+            fh.write(f"9606\tg{i}\tREVIEWED\t-\t-\tNP_{i:06d}.1\t-\tNC_1.1\t-\t1\t2\t+\tG\t-\t-\tSYM{i}\n")
+    fm = tmp_path / "fm.tsv"
+    with fm.open("w") as fh:
+        fh.write("family_id\talg\thuman_gene\thuman_scaf\tsource\tnote\n")
+        for i in range(200):
+            fh.write(f"fam{i}\tA1a\tNP_{i:06d}.1\tNC\thuman_rbh\t\n")
+    g2g = tmp_path / "g2g.tsv"
+    with g2g.open("w") as fh:
+        fh.write("#tax\tGeneID\tGO_ID\tEvidence\tQualifier\tTerm\tPub\tCategory\n")
+        for i in range(200):
+            fh.write(f"9606\tg{i}\tGO:UB\tIEA\t-\tub\t1\tProcess\n")
+            if i < 10:
+                fh.write(f"9606\tg{i}\tGO:PLANTED\tIEA\t-\tplanted\t1\tProcess\n")
+    obo = tmp_path / "mini.obo"
+    obo.write_text(
+        "format-version: 1.2\n\n"
+        "[Term]\nid: GO:UB\nname: ubiquitous-term\nnamespace: biological_process\n\n"
+        "[Term]\nid: GO:PLANTED\nname: planted-process\nnamespace: biological_process\n\n"
+    )
+    out = tmp_path / "out"
+    sweep_mod.run(
+        supp_table=str(up), family_map=str(fm),
+        gene2accession=str(g2a), gene2go=str(g2g),
+        out_dir=str(out), obo=str(obo),
+        write_curves=False, verbose=False,
+    )
+    sig = pd.read_csv(out / "significant_terms.tsv", sep="\t")
+    # Every enrichment-standard column present in the canonical order.
+    required = ["go_id", "go_name", "go_namespace",
+                "k", "n", "K", "N",
+                "ratio_in_study", "ratio_in_pop",
+                "fold", "p", "correction_method", "q",
+                "gene_ids", "gene_symbols"]
+    assert all(c in sig.columns for c in required)
+    # go_name populated from OBO.
+    planted = sig[sig["go_id"] == "GO:PLANTED"]
+    assert (planted["go_name"] == "planted-process").all()
+    # ratio_in_study strings are well-formed "k/n".
+    r = planted.iloc[0]
+    assert r["ratio_in_study"] == f"{r['k']}/{r['n']}"
+    assert r["ratio_in_pop"] == f"{r['K']}/{r['N']}"
+    # Correction method label is stable.
+    assert (sig["correction_method"] == "fdr_bh").all()
+    # gene_ids + gene_symbols populated, same length.
+    ids = r["gene_ids"].split(";")
+    syms = r["gene_symbols"].split(";")
+    assert len(ids) == len(syms) == r["k"]
+    # Symbols follow the SYM{i} pattern from the fixture.
+    for s in syms:
+        assert s.startswith("SYM")
+
+
 def test_run_end_to_end_with_real_hits(tmp_path):
     # Write the synthetic clade rows + a minimal family_map + gene2accession
     # + gene2go so run() can chain through them.

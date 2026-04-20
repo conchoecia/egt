@@ -582,6 +582,11 @@ def best_cell_gene_sets(sig_df, gene_lists_df, min_fold=3.0):
                   .sort_values("q")
                   .drop_duplicates(subset=["clade", "go_id"])
                   .copy())
+    # `significant_terms.tsv` now carries gene_ids inline (canonical
+    # schema). Drop it before joining against the term_gene_lists sidecar
+    # so pandas doesn't disambiguate the merge into gene_ids_x / _y.
+    best = best.drop(columns=[c for c in ("gene_ids", "gene_symbols")
+                              if c in best.columns])
     # Merge with the per-cell gene list file.
     if gene_lists_df is None or gene_lists_df.empty:
         return pd.DataFrame()
@@ -589,8 +594,10 @@ def best_cell_gene_sets(sig_df, gene_lists_df, min_fold=3.0):
         gene_lists_df[["clade", "axis", "N_threshold", "go_id", "gene_ids"]],
         on=["clade", "axis", "N_threshold", "go_id"], how="left")
     merged = merged[merged["gene_ids"].notna() & (merged["gene_ids"] != "")]
+    # term_gene_lists.tsv.gz uses comma-joined IDs; significant_terms.tsv
+    # uses semicolon. Support both so we can later drop the sidecar.
     merged["gene_set"] = merged["gene_ids"].map(
-        lambda s: frozenset(s.split(",")))
+        lambda s: frozenset(s.replace(";", ",").split(",")))
     return merged[["clade", "go_id", "go_namespace", "go_name", "k",
                    "q", "fold", "gene_set"]]
 

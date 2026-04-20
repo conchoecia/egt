@@ -84,6 +84,8 @@ def enrich_for_foreground(
                  term_namespace=term_namespace.get(t, "?"))
             for (t, k, K, ntot_, N_, fold, p), q in zip(sub, qvals)
         ]
-        enriched.sort(key=lambda d: d["q"])
+        # Secondary sort on go_id makes top_term selection reproducible
+        # across Python hash seeds when multiple terms tie on q.
+        enriched.sort(key=lambda d: (d["q"], d["go_id"]))
         out_by_ns[ns] = enriched
     return out_by_ns

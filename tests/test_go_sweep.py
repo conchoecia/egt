@@ -140,6 +140,7 @@ def test_run_end_to_end_writes_expected_files(tmp_path, loaded_refs):
         gene2accession=str(GO_DB / "gene2accession.tsv"),
         gene2go=str(GO_DB / "gene2go.tsv"),
         out_dir=str(tmp_path),
+        obo=str(GO_DB / "mini.obo"),
         write_curves=True,
         verbose=False,
     )
@@ -156,6 +157,15 @@ def test_run_end_to_end_writes_expected_files(tmp_path, loaded_refs):
     sdf = pd.read_csv(tmp_path / "summary.tsv", sep="\t")
     for c in ("axis", "N_threshold", "namespace", "top_q"):
         assert c in sdf.columns
+    # significant_terms follows the publication-standard schema.
+    sig = pd.read_csv(tmp_path / "significant_terms.tsv", sep="\t")
+    expected = ["clade", "axis", "N_threshold", "sweep_namespace",
+                "go_id", "go_name", "go_namespace",
+                "k", "n", "K", "N",
+                "ratio_in_study", "ratio_in_pop",
+                "fold", "p", "correction_method", "q",
+                "gene_ids", "gene_symbols"]
+    assert list(sig.columns) == expected
 
 
 def test_run_no_curves_flag(tmp_path):
