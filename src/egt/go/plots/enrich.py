@@ -261,23 +261,30 @@ def parse_obo(path):
 # ---------------------------------------------------------------------
 # Dotplot (clusterProfiler style)
 # ---------------------------------------------------------------------
-def draw_dotplot(fig_ax, terms_df, title):
+def draw_dotplot(fig_ax, terms_df, title, vmin, vmax):
     """Draw one dotplot on an existing matplotlib Axes.
 
-    terms_df: columns ['go_name', 'log2fold', 'mlog10q', 'k'] sorted by
-    mlog10q desc (highest-significance first at top of y-axis).
+    terms_df: columns ['go_name', 'log2fold', 'q_plot', 'k'] sorted by
+    q ascending (most significant at top of y-axis).
+
+    Color convention matches clusterProfiler/enrichplot (Yu 2012, 2024):
+    low q-value = red, high q-value = blue, log-scaled so a range from
+    1e-20 to 1 is legible. `vmin`/`vmax` are supplied by the caller so
+    every panel on a figure shares the same colour scale.
     """
     if terms_df.empty:
         fig_ax.set_title(title + "  (no hits)", fontsize=9)
         fig_ax.set_xticks([])
         fig_ax.set_yticks([])
         return None
-    ys = np.arange(len(terms_df))[::-1]  # highest-q at top
+    import matplotlib.colors as mcolors
+    ys = np.arange(len(terms_df))[::-1]  # most-significant at top
     sc = fig_ax.scatter(
         terms_df["log2fold"], ys,
         s=40 + 10 * terms_df["k"].clip(upper=50),
-        c=terms_df["mlog10q"],
-        cmap="viridis",
+        c=terms_df["q_plot"],
+        cmap="RdBu",                 # low q → red, high q → blue
+        norm=mcolors.LogNorm(vmin=vmin, vmax=vmax),
         edgecolors="#333", linewidths=0.4,
     )
     fig_ax.set_yticks(ys)
@@ -321,22 +328,41 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
                        .drop_duplicates(subset=["go_id"]))
             best["log2fold"] = best["fold"].map(
                 lambda f: math.log2(f) if f and f > 0 and math.isfinite(f) else float("nan"))
-            best["mlog10q"] = best["q"].map(
-                lambda q: 300.0 if q == 0 else (-math.log10(q) if q and q > 0 else float("nan")))
-            best = best.dropna(subset=["log2fold", "mlog10q"])
+            # Clip q=0 to a small floor so LogNorm stays finite; the raw
+            # q is shown on the colorbar directly (scientific notation).
+            Q_FLOOR = 1e-20
+            best["q_plot"] = best["q"].map(
+                lambda q: max(q, Q_FLOOR) if q is not None and q >= 0
+                else float("nan"))
+            best = best.dropna(subset=["log2fold", "q_plot"])
+
+            # Shared color scale across all three namespace panels so
+            # same raw q-value → same colour in every subplot.
+            panel_qs = []
+            ns_subs = {}
+            for ns in ("BP", "MF", "CC"):
+                s = best[best["go_namespace"] == ns]
+                s = s.sort_values("q").head(top_n)
+                s = s.sort_values("log2fold", ascending=False)
+                ns_subs[ns] = s
+                panel_qs.extend(s["q_plot"].tolist())
+            if panel_qs:
+                vmin = max(min(panel_qs), Q_FLOOR)
+                vmax = max(max(panel_qs), 0.05)
+            else:
+                vmin, vmax = Q_FLOOR, 1.0
 
             fig, axes = plt.subplots(1, 3, figsize=(17, 6))
             mappables = []
             per_ns_sizes = []
             for col, ns in enumerate(("BP", "MF", "CC")):
-                s = best[best["go_namespace"] == ns]
+                s = ns_subs[ns]
                 # Select top-N by strongest q (clusterProfiler-style), then
                 # re-sort the selected rows by log2fold descending so the
                 # x-axis decreases monotonically top-to-bottom on the plot
                 # (matches clusterProfiler's enrichplot::dotplot convention).
-                s = s.sort_values("q").head(top_n)
-                s = s.sort_values("log2fold", ascending=False)
-                sc = draw_dotplot(axes[col], s, f"{ns}  (top {len(s)})")
+                sc = draw_dotplot(axes[col], s, f"{ns}  (top {len(s)})",
+                                    vmin=vmin, vmax=vmax)
                 if sc is not None:
                     mappables.append(sc)
                     per_ns_sizes.extend(s["k"].tolist())
@@ -344,12 +370,27 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
             fig.suptitle(f"{clade} — top GO enrichments per namespace  "
                           f"(fold ≥ {min_fold:g}×{k_tag})",
                           fontsize=11, y=1.01)
-            # Right-side colorbar for -log10(q).
+            # Raw-q colorbar, log-scaled with scientific-notation tick
+            # labels. Horizontal dashed red line at q = 0.05 inside the
+            # colorbar marks the conventional significance threshold so
+            # readers can eyeball which dots clear it.
             if mappables:
+                from matplotlib.ticker import LogFormatterSciNotation
                 cbar = fig.colorbar(mappables[-1], ax=axes,
                                      orientation="vertical", fraction=0.03,
                                      pad=0.02)
-                cbar.set_label("-log10(q)", fontsize=8)
+                cbar.set_label("q-value", fontsize=8)
+                cbar.ax.yaxis.set_major_formatter(
+                    LogFormatterSciNotation()
+                )
+                cbar.ax.tick_params(labelsize=7)
+                if 0.05 >= vmin and 0.05 <= vmax:
+                    cbar.ax.axhline(0.05, color="red", lw=1.2, ls=":")
+                    cbar.ax.annotate("0.05",
+                                       xy=(1.15, 0.05),
+                                       xycoords=("axes fraction", "data"),
+                                       fontsize=7, color="red",
+                                       va="center")
             # Size legend: k = foreground genes annotated to that term
             # (dot size scales as 40 + 10 * min(k, 50)).
             if per_ns_sizes:
