@@ -85,9 +85,10 @@ def test_sweep_clade_shape(loaded_refs):
     assert records
     # Each record carries the fixed schema keys.
     required = {"axis", "N_threshold", "pairs_used", "namespace",
-                "foreground_size_[n]", "n_families", "n_terms_tested",
-                "n_hits_q05", "n_hits_q25", "top_term",
-                "top_term_fold_enrichment",
+                "foreground_size_[n]", "background_size_[N]",
+                "n_families", "foreground_raw_geneids",
+                "n_terms_tested", "n_hits_q05", "n_hits_q25",
+                "top_term", "top_term_fold_enrichment",
                 "top_term_hits_[k]", "top_term_bg_hits_[K]",
                 "top_q_value"}
     for r in records:

@@ -121,13 +121,28 @@ def sweep_clade(
                 n_q25 = sum(1 for r in res if r["q"] <= 0.25)
                 top = res[0] if res else None
                 top_q = top["q"] if top else float("nan")
+                # Hypergeometric n is the post-filter count (foreground
+                # genes that also carry >=1 GO annotation); it may be <
+                # raw `len(foreground)` when some foreground genes are
+                # unannotated. Emit both counts so `foreground_size_[n]`
+                # matches the `n` reported on each (clade, term) row of
+                # significant_terms.tsv. Background N is the same for
+                # every clade, every axis, every N_threshold — it is the
+                # annotatable BCnS family universe (= len(
+                # background_to_terms)) by design, so we can compare the
+                # hypergeometric parameters across clades.
+                fg_n = top["n"] if top else (
+                    len(foreground & set(background_to_terms))
+                )
                 records.append({
                     "axis": axis,
                     "N_threshold": N,
                     "pairs_used": len(idxs),
                     "namespace": ns,
-                    "foreground_size_[n]": len(foreground),
+                    "foreground_size_[n]": fg_n,
+                    "background_size_[N]": len(background_to_terms),
                     "n_families": len(families),
+                    "foreground_raw_geneids": len(foreground),
                     "n_terms_tested": len(res),
                     "n_hits_q05": n_q05,
                     "n_hits_q25": n_q25,
