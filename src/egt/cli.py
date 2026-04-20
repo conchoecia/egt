@@ -6,9 +6,12 @@ import importlib
 import sys
 from typing import Callable
 
-# Registry: subcommand name → (module, help text)
-# Each target module must expose `def main(argv: list[str] | None = None) -> int | None`.
-SUBCOMMANDS: dict[str, tuple[str, str]] = {
+from .go_subcommands import GO_SUBCOMMANDS
+
+# Registry: subcommand name → (module, help text) OR a nested dict of the
+# same shape (umbrella group). Each leaf module must expose
+# `def main(argv: list[str] | None = None) -> int | None`.
+SUBCOMMANDS: dict[str, object] = {
     "phylotreeumap":            ("egt.phylotreeumap",              "PhyloTreeUMAP — manifold projection of per-species ALG state"),
     "phylotreeumap-subsample":  ("egt.phylotreeumap_subsample",    "Subsample species for UMAP with per-clade caps"),
     "alg-fusions":              ("egt.plot_alg_fusions",           "Plot ALG fusion events across a phylogeny (v3)"),
@@ -43,6 +46,8 @@ SUBCOMMANDS: dict[str, tuple[str, str]] = {
     "build-family-naming-map":  ("egt.build_family_naming_map",    "BCnS ALG family → human gene ID map"),
     "entanglement-browse":      ("egt.entanglement_browse",        "Rank clade-characteristic ALG fusion pairs"),
     "entanglement-go-enrich":   ("egt.entanglement_go_enrich",     "GO enrichment on clade-characteristic ALG genes"),
+    # Umbrella group — `egt go <sub>`. Full listing in GO_SUBCOMMANDS.
+    "go":                       (GO_SUBCOMMANDS,                   "GO enrichment analysis suite"),
 }
 
 
@@ -54,29 +59,42 @@ def _load(module_path: str) -> Callable[[list[str] | None], int | None]:
     return fn
 
 
-def main(argv: list[str] | None = None) -> int:
+def _print_help(registry: dict, prog: str) -> None:
     parser = argparse.ArgumentParser(
-        prog="egt",
+        prog=prog,
         description="Evolutionary Genome Topology analysis toolkit.",
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
-    for name, (_mod, hlp) in SUBCOMMANDS.items():
+    for name, val in registry.items():
+        hlp = val[1] if isinstance(val, tuple) else "(subgroup — see `--help`)"
         sub.add_parser(name, help=hlp, add_help=False)
+    parser.print_help()
 
-    argv = sys.argv[1:] if argv is None else argv
+
+def _dispatch(registry: dict, argv: list[str], prog: str) -> int:
     if not argv or argv[0] in ("-h", "--help"):
-        parser.print_help()
+        _print_help(registry, prog)
         return 0
-
     cmd, *rest = argv
-    if cmd not in SUBCOMMANDS:
-        parser.error(f"unknown command: {cmd!r}. Run `egt --help` for a list.")
-
-    module_path, _hlp = SUBCOMMANDS[cmd]
+    if cmd not in registry:
+        print(f"{prog}: unknown command: {cmd!r}. "
+              f"Run `{prog} --help` for a list.", file=sys.stderr)
+        return 2
+    entry = registry[cmd]
+    # Nested group: recurse with the child registry.
+    if isinstance(entry, tuple) and isinstance(entry[0], dict):
+        return _dispatch(entry[0], rest, f"{prog} {cmd}")
+    # Leaf: (module_path, help).
+    module_path, _hlp = entry
     fn = _load(module_path)
     rv = fn(rest)
     return int(rv) if rv is not None else 0
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    return _dispatch(SUBCOMMANDS, argv, "egt")
+
+
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

@@ -30,6 +30,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .go.stats import bh_qvalues, hypergeom_sf
+
 
 def _parse_gaf(gaf_path: Path) -> dict[str, set[str]]:
     """Parse a GOA GAF file → {gene_symbol: {go_id, ...}}."""
@@ -48,41 +50,6 @@ def _parse_gaf(gaf_path: Path) -> dict[str, set[str]]:
             if sym and go.startswith("GO:"):
                 out[sym].add(go)
     return out
-
-
-def _hypergeom_p(k: int, K: int, n: int, N: int) -> float:
-    """P(X >= k) where X ~ Hypergeometric(N, K, n).
-
-    No scipy dependency: sum PMF from k..min(K,n).
-    """
-    from math import comb
-    if N <= 0 or k < 0 or K < 0 or n < 0:
-        return 1.0
-    top = min(K, n)
-    if k > top:
-        return 0.0
-    total_choose = comb(N, n)
-    if total_choose == 0:
-        return 1.0
-    s = 0
-    for i in range(k, top + 1):
-        s += comb(K, i) * comb(N - K, n - i)
-    return s / total_choose
-
-
-def _bh_adjust(pvals: np.ndarray) -> np.ndarray:
-    n = len(pvals)
-    if n == 0:
-        return pvals
-    order = np.argsort(pvals)
-    ranks = np.arange(1, n + 1)
-    adj = pvals[order] * n / ranks
-    # enforce monotonicity
-    for i in range(n - 2, -1, -1):
-        adj[i] = min(adj[i], adj[i + 1])
-    q = np.empty(n)
-    q[order] = np.clip(adj, 0, 1)
-    return q
 
 
 def main(argv=None):
@@ -161,14 +128,14 @@ def main(argv=None):
             k = sum(1 for g in fg_genes if go in background_go.get(g, set()))
             if k < args.min_term_hits or K == 0:
                 continue
-            p = _hypergeom_p(k, K, n, N)
+            p = hypergeom_sf(k, N, K, n)
             fold = (k / n) / (K / N) if (n > 0 and N > 0 and K > 0) else np.nan
             rows.append(dict(clade=clade, go_id=go, k=k, K=K, n=n, N=N,
                              fold_enrichment=fold, p_value=p))
         if not rows:
             continue
         clade_df = pd.DataFrame(rows)
-        clade_df["q_value"] = _bh_adjust(clade_df["p_value"].to_numpy())
+        clade_df["q_value"] = bh_qvalues(clade_df["p_value"].to_numpy())
         all_rows.append(clade_df[clade_df["q_value"] < args.fdr])
 
     out_path = args.out_dir / "go_enrichment_per_clade.tsv"

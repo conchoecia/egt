@@ -1,0 +1,9 @@
+nodename	ortholog1	ortholog2	occupancy_in	sd_in_out_ratio_log_sigma	mean_in_out_ratio_log_sigma	mean_in	mean_out	close_in_clade	distant_in_clade	stable_in_clade	unstable_in_clade	unique_to_clade
+CladeX	FAM_A	FAM_B	0.9	-2.5	-2.3	1000	100000	True	False	True	False	False
+CladeX	FAM_A	FAM_C	0.8	-2.1	-1.8	2000	50000	True	False	True	False	False
+CladeX	FAM_D	FAM_E	0.7	-1.9	-1.6	3000	40000	False	True	True	False	False
+CladeX	FAM_A	FAM_D	0.6	-1.5	-1.2	5000	30000	False	False	False	True	False
+CladeX	FAM_C	FAM_F	0.55	-1.3	-1.0	6000	20000	False	False	False	False	True
+CladeY	FAM_A	FAM_B	0.95	-3.0	-2.8	500	200000	True	False	True	False	False
+CladeY	FAM_B	FAM_G	0.85	-2.5	-2.2	1500	100000	False	False	True	False	False
+CladeY	FAM_D	FAM_E	0.65	-0.5	-0.4	5000	25000	True	False	True	False	False

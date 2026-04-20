@@ -1,0 +1,16 @@
+nodename	ortholog1	ortholog2	occupancy_in	sd_in_out_ratio_log_sigma	mean_in_out_ratio_log_sigma	mean_in	mean_out
+CladeX	FAM_A	FAM_B	0.9	-2.5	-2.3	1000	100000
+CladeX	FAM_A	FAM_C	0.8	-2.1	-1.8	2000	50000
+CladeX	FAM_B	FAM_C	0.7	-1.9	-1.6	3000	40000
+CladeX	FAM_A	FAM_E	0.6	-1.5	-1.2	5000	30000
+CladeX	FAM_B	FAM_E	0.55	-1.3	-1.0	6000	20000
+CladeX	FAM_C	FAM_E	0.5	-1.0	-0.8	7000	15000
+CladeX	FAM_A	FAM_D	0.9	-0.9	-0.7	8000	10000
+CladeX	FAM_D	FAM_E	0.85	-0.5	-0.3	10000	8000
+CladeX	FAM_B	FAM_D	0.75	-0.3	-0.2	12000	7000
+CladeX	FAM_C	FAM_D	0.65	-0.1	0.0	15000	6000
+CladeY	FAM_A	FAM_C	0.95	-3.0	-2.8	500	200000
+CladeY	FAM_B	FAM_E	0.85	-2.5	-2.2	1500	100000
+CladeY	FAM_C	FAM_E	0.75	-1.5	-1.3	3000	50000
+CladeY	FAM_A	FAM_B	0.65	-0.5	-0.4	5000	25000
+CladeY	FAM_D	FAM_E	0.55	-0.1	0.0	8000	10000
