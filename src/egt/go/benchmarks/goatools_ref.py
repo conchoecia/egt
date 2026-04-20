@@ -99,7 +99,8 @@ def parse_family_map(path, prot_to_gene):
 def best_sweep_cell_per_clade(summary_path):
     """For each clade, pick the (axis, N, namespace='all') row with the
     smallest top_q. Returns dict {clade: {axis, N_threshold}}."""
-    sdf = pd.read_csv(summary_path, sep="\t")
+    from ..io import load_sweep_summary
+    sdf = load_sweep_summary(summary_path)
     sdf = sdf[(sdf["namespace"] == "all") & sdf["top_q"].notna()]
     best = (sdf.sort_values("top_q")
                .drop_duplicates(subset=["clade"])

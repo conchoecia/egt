@@ -85,9 +85,11 @@ def test_sweep_clade_shape(loaded_refs):
     assert records
     # Each record carries the fixed schema keys.
     required = {"axis", "N_threshold", "pairs_used", "namespace",
-                "foreground_size", "n_families", "n_terms_tested",
-                "n_hits_q05", "n_hits_q25", "top_term", "top_term_fold",
-                "top_term_k", "top_term_K", "top_q"}
+                "foreground_size_[n]", "n_families", "n_terms_tested",
+                "n_hits_q05", "n_hits_q25", "top_term",
+                "top_term_fold_enrichment",
+                "top_term_hits_[k]", "top_term_bg_hits_[K]",
+                "top_q_value"}
     for r in records:
         assert required <= set(r.keys())
     # Axes covered.
@@ -155,7 +157,7 @@ def test_run_end_to_end_writes_expected_files(tmp_path, loaded_refs):
     assert per, "expected at least one per-clade tsv"
     # Summary shape.
     sdf = pd.read_csv(tmp_path / "summary.tsv", sep="\t")
-    for c in ("axis", "N_threshold", "namespace", "top_q"):
+    for c in ("axis", "N_threshold", "namespace", "top_q_value"):
         assert c in sdf.columns
     # significant_terms follows the publication-standard schema.
     sig = pd.read_csv(tmp_path / "significant_terms.tsv", sep="\t")

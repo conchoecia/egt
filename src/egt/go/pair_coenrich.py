@@ -57,7 +57,8 @@ def family_term_table(
 def best_cell_per_clade(summary_path) -> dict[str, dict]:
     """Pull the `(axis, N)` cell with the smallest top_q per clade from
     summary.tsv, using namespace='all'."""
-    sdf = pd.read_csv(summary_path, sep="\t")
+    from .io import load_sweep_summary
+    sdf = load_sweep_summary(summary_path)
     sdf = sdf[(sdf["namespace"] == "all") & sdf["top_q"].notna()]
     best = (sdf.sort_values("top_q")
                .drop_duplicates(subset=["clade"])

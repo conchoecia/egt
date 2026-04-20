@@ -121,22 +121,23 @@ def sweep_clade(
                 n_q25 = sum(1 for r in res if r["q"] <= 0.25)
                 top = res[0] if res else None
                 top_q = top["q"] if top else float("nan")
-                records.append(dict(
-                    axis=axis,
-                    N_threshold=N,
-                    pairs_used=len(idxs),
-                    namespace=ns,
-                    foreground_size=len(foreground),
-                    n_families=len(families),
-                    n_terms_tested=len(res),
-                    n_hits_q05=n_q05,
-                    n_hits_q25=n_q25,
-                    top_term=top["go_id"] if top else "",
-                    top_term_fold=top["fold"] if top else float("nan"),
-                    top_term_k=top["k"] if top else 0,
-                    top_term_K=top["K"] if top else 0,
-                    top_q=top_q,
-                ))
+                records.append({
+                    "axis": axis,
+                    "N_threshold": N,
+                    "pairs_used": len(idxs),
+                    "namespace": ns,
+                    "foreground_size_[n]": len(foreground),
+                    "n_families": len(families),
+                    "n_terms_tested": len(res),
+                    "n_hits_q05": n_q05,
+                    "n_hits_q25": n_q25,
+                    "top_term": top["go_id"] if top else "",
+                    "top_term_fold_enrichment":
+                        top["fold"] if top else float("nan"),
+                    "top_term_hits_[k]": top["k"] if top else 0,
+                    "top_term_bg_hits_[K]": top["K"] if top else 0,
+                    "top_q_value": top_q,
+                })
                 if not math.isnan(top_q) and top_q > 0:
                     curve_data[(axis, ns)].append((N, -math.log10(top_q)))
                 elif top and top_q == 0:

@@ -213,6 +213,28 @@ def load_significant_terms(path) -> pd.DataFrame:
     return df.rename(columns=SIGNIFICANT_TERMS_SHORT_ALIASES)
 
 
+# Per-cell sweep summary (summary.tsv + per_clade/<clade>.tsv) carries
+# a different set of hypergeometric names than significant_terms.tsv
+# (one row per sweep cell, not per enriched term). Same bracket
+# convention; this alias map lets downstream code keep using short
+# identifiers without re-writing every accessor.
+SWEEP_SUMMARY_SHORT_ALIASES: dict[str, str] = {
+    "foreground_size_[n]": "foreground_size",
+    "top_term_hits_[k]": "top_term_k",
+    "top_term_bg_hits_[K]": "top_term_K",
+    "top_term_fold_enrichment": "top_term_fold",
+    "top_q_value": "top_q",
+}
+
+
+def load_sweep_summary(path) -> pd.DataFrame:
+    """Read summary.tsv (or a per-clade sweep tsv) and alias canonical
+    column names to the short forms used by the egt.go plotters and
+    benchmarks."""
+    df = pd.read_csv(path, sep="\t")
+    return df.rename(columns=SWEEP_SUMMARY_SHORT_ALIASES)
+
+
 def load_unique_pairs(path) -> pd.DataFrame:
     """Load a defining-pair table (.xlsx or TSV / TSV.gz) into a DataFrame.
 

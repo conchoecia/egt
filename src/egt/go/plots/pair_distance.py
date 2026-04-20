@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from ..io import load_unique_pairs
+from ..io import load_sweep_summary, load_unique_pairs
 
 
 OCCUPANCY_MIN = 0.5
@@ -76,7 +76,7 @@ def _panel(ax, panel_info, log_mean_in, log_mean_out, sub_index, lims, axis, N_s
 
 def run(supp_table_path, summary_path, out_path) -> None:
     supp = load_unique_pairs(supp_table_path)
-    summary = pd.read_csv(summary_path, sep="\t")
+    summary = load_sweep_summary(summary_path)
     clades = sorted(supp["nodename"].dropna().unique())
     axes_order = ("stability", "closeness", "intersection")
 
