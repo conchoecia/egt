@@ -138,27 +138,32 @@ def pair_coenrich_for_clade(
         expected = n_pairs * p_co
         pval = binom_sf(kco, n_pairs, p_co)
         fold = kco / expected if expected > 0 else float("inf")
-        out.append(dict(
-            go_id=t,
-            go_namespace=term_namespace.get(t, "?"),
-            k_co=kco,
-            k_either=k_either[t],
-            n_pairs=n_pairs,
-            K_fams=K,
-            N_fams=N_fams,
-            p_fam=p_fam,
-            p_co_null=p_co,
-            expected_k_co=expected,
-            fold=fold,
-            p=pval,
-        ))
+        # Columns arranged so k → n → K → N → fold → q form the
+        # contiguous headline block; auxiliary fields (k_either, p_fam,
+        # p_co_null, expected_k_co, raw p, correction_method) follow.
+        out.append({
+            "go_id": t,
+            "go_namespace": term_namespace.get(t, "?"),
+            "pair_cohits_[k]": kco,
+            "pair_count_[n]": n_pairs,
+            "fam_hits_[K]": K,
+            "fam_count_[N]": N_fams,
+            "fold_enrichment": fold,
+            "q_value": None,  # filled after BH below
+            "pair_either_hits": k_either[t],
+            "p_fam": p_fam,
+            "p_co_null": p_co,
+            "expected_k_co": expected,
+            "p_value": pval,
+            "correction_method": "fdr_bh",
+        })
         pvals.append(pval)
 
     if out:
         qs = bh_qvalues(np.array(pvals))
         for r, q in zip(out, qs):
-            r["q"] = float(q)
-    out.sort(key=lambda d: d["q"])
+            r["q_value"] = float(q)
+    out.sort(key=lambda d: d["q_value"])
     return out
 
 
@@ -166,15 +171,17 @@ def _compare_to_bag(
     summ_co: pd.DataFrame, sig_path: Path, out_dir: Path
 ) -> Path:
     from .io import load_significant_terms
+    # load_significant_terms aliases the canonical sig columns to the
+    # short names (q, fold) for internal ease; pick those out and
+    # rename to the side-by-side bag/pair-co column convention.
     sig = load_significant_terms(sig_path)
     sig = sig[sig["sweep_namespace"] == "all"]
-    merged = summ_co.merge(
+    merged = summ_co.rename(
+        columns={"q_value": "q_pair_co", "fold_enrichment": "fold_pair_co"}
+    ).merge(
         sig[["clade", "axis", "N_threshold", "go_id", "q", "fold"]].rename(
             columns={"q": "q_bag", "fold": "fold_bag"}),
         on=["clade", "axis", "N_threshold", "go_id"], how="left",
-    )
-    merged = merged.rename(
-        columns={"q": "q_pair_co", "fold": "fold_pair_co"}
     )
     out_path = out_dir / "pair_co_vs_bag.tsv.gz"
     merged.to_csv(out_path, sep="\t", index=False, compression="gzip")
@@ -239,11 +246,14 @@ def run(
         cdf.insert(0, "clade", clade)
         cdf.insert(1, "axis", axis)
         cdf.insert(2, "N_threshold", N)
+        # k → n → K → N → fold → q contiguous headline block.
         cols_order = ["clade", "axis", "N_threshold",
-                      "go_id", "go_namespace", "go_name",
-                      "k_co", "k_either", "n_pairs",
-                      "K_fams", "N_fams", "p_fam", "p_co_null",
-                      "expected_k_co", "fold", "p", "q"]
+                      "go_id", "go_name", "go_namespace",
+                      "pair_cohits_[k]", "pair_count_[n]",
+                      "fam_hits_[K]", "fam_count_[N]",
+                      "fold_enrichment", "q_value",
+                      "pair_either_hits", "p_fam", "p_co_null",
+                      "expected_k_co", "p_value", "correction_method"]
         cdf = cdf[cols_order]
         cdf.to_csv(out / "per_clade" / f"{clade}.tsv",
                    sep="\t", index=False)
@@ -252,7 +262,7 @@ def run(
 
     agg_path = out / "pair_coenrich.tsv.gz"
     if all_rows:
-        summ = pd.DataFrame(all_rows).sort_values(["clade", "q"])
+        summ = pd.DataFrame(all_rows).sort_values(["clade", "q_value"])
         summ.to_csv(agg_path, sep="\t", index=False, compression="gzip")
         _log(f"[write] {agg_path} rows={len(summ)}")
         top10 = summ.groupby("clade").head(10)

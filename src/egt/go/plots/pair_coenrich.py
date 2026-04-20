@@ -29,8 +29,18 @@ CATEGORY_COLORS = {
 }
 
 
+PAIR_CO_SHORT_ALIASES = {
+    "pair_cohits_[k]": "k_co",
+    "pair_count_[n]": "n_pairs",
+    "fam_hits_[K]": "K_fams",
+    "fam_count_[N]": "N_fams",
+    "pair_either_hits": "k_either",
+}
+
+
 def load(in_path) -> pd.DataFrame:
     df = pd.read_csv(in_path, sep="\t")
+    df = df.rename(columns=PAIR_CO_SHORT_ALIASES)
     df["q_pair"] = df["q_pair_co"]
     df["q_bag_eff"] = df["q_bag"].fillna(1.0)
     df["mlog10_q_pair"] = -np.log10(np.clip(df["q_pair"], 1e-300, 1.0))

@@ -160,15 +160,16 @@ def test_run_end_to_end_writes_expected_files(tmp_path, loaded_refs):
     sdf = pd.read_csv(tmp_path / "summary.tsv", sep="\t")
     for c in ("axis", "N_threshold", "namespace", "top_q_value"):
         assert c in sdf.columns
-    # significant_terms follows the publication-standard schema.
+    # significant_terms follows the publication-standard schema,
+    # with k/n/K/N/fold_enrichment/q_value as one contiguous block.
     sig = pd.read_csv(tmp_path / "significant_terms.tsv", sep="\t")
     expected = ["clade", "axis", "N_threshold", "sweep_namespace",
                 "go_id", "go_name", "go_namespace",
                 "foreground_hits_[k]", "foreground_size_[n]",
                 "background_hits_[K]", "background_size_[N]",
+                "fold_enrichment", "q_value",
                 "ratio_in_study_[k/n]", "ratio_in_pop_[K/N]",
-                "fold_enrichment", "p_value",
-                "correction_method", "q_value",
+                "p_value", "correction_method",
                 "gene_ids", "gene_symbols"]
     assert list(sig.columns) == expected
 

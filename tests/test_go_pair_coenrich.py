@@ -104,13 +104,13 @@ def test_pair_coenrich_for_clade_detects_planted_signal():
                                       term_namespace=ns)
     planted_row = next(r for r in out if r["go_id"] == "GO:PLANTED")
     # Every one of the 10 pairs co-carried the planted term.
-    assert planted_row["k_co"] == 10
-    assert planted_row["n_pairs"] == 10
-    # p_fam = 4/50 = 0.08; p_co = 0.0064; expected ≈ 0.064 → k_co=10
+    assert planted_row["pair_cohits_[k]"] == 10
+    assert planted_row["pair_count_[n]"] == 10
+    # p_fam = 4/50 = 0.08; p_co = 0.0064; expected ≈ 0.064 → k=10
     # is absurdly over-represented, p should be essentially 0.
-    assert planted_row["p"] < 1e-8
-    assert planted_row["q"] < 1e-7
-    assert planted_row["fold"] > 100
+    assert planted_row["p_value"] < 1e-8
+    assert planted_row["q_value"] < 1e-7
+    assert planted_row["fold_enrichment"] > 100
 
 
 def test_pair_coenrich_for_clade_filters_and_noop_paths():
@@ -205,17 +205,20 @@ def test_main_argv(tmp_path):
 
 def test_compare_to_bag_merges_both_tables(tmp_path):
     # Build a minimal summ_co and significant_terms pair to drive the
-    # comparison path.
+    # comparison path. summ_co uses the canonical column names emitted
+    # by pair_coenrich_for_clade; sig uses the canonical significant
+    # terms schema (short aliases come from load_significant_terms).
     summ_co = pd.DataFrame([
         dict(clade="X", axis="stability", N_threshold=10,
-             go_id="GO:A", q=0.01, fold=5.0),
+             go_id="GO:A", q_value=0.01, fold_enrichment=5.0),
         dict(clade="X", axis="stability", N_threshold=10,
-             go_id="GO:B", q=0.5, fold=1.1),
+             go_id="GO:B", q_value=0.5, fold_enrichment=1.1),
     ])
-    sig = pd.DataFrame([
-        dict(clade="X", axis="stability", N_threshold=10,
-             sweep_namespace="all", go_id="GO:A", q=0.001, fold=6.0),
-    ])
+    sig = pd.DataFrame([{
+        "clade": "X", "axis": "stability", "N_threshold": 10,
+        "sweep_namespace": "all", "go_id": "GO:A",
+        "q_value": 0.001, "fold_enrichment": 6.0,
+    }])
     sig_path = tmp_path / "significant_terms.tsv"
     sig.to_csv(sig_path, sep="\t", index=False)
     out = pc._compare_to_bag(summ_co, sig_path, tmp_path)

@@ -134,24 +134,27 @@ def sweep_clade(
                 fg_n = top["n"] if top else (
                     len(foreground & set(background_to_terms))
                 )
+                # Columns laid out so the top-term hypergeometric block
+                # (k → n → K → N → fold → q) is contiguous, mirroring
+                # the per-term significant_terms.tsv schema.
                 records.append({
                     "axis": axis,
                     "N_threshold": N,
                     "pairs_used": len(idxs),
                     "namespace": ns,
+                    "top_term": top["go_id"] if top else "",
+                    "top_term_hits_[k]": top["k"] if top else 0,
                     "foreground_size_[n]": fg_n,
+                    "top_term_bg_hits_[K]": top["K"] if top else 0,
                     "background_size_[N]": len(background_to_terms),
+                    "top_term_fold_enrichment":
+                        top["fold"] if top else float("nan"),
+                    "top_q_value": top_q,
                     "n_families": len(families),
                     "foreground_raw_geneids": len(foreground),
                     "n_terms_tested": len(res),
                     "n_hits_q05": n_q05,
                     "n_hits_q25": n_q25,
-                    "top_term": top["go_id"] if top else "",
-                    "top_term_fold_enrichment":
-                        top["fold"] if top else float("nan"),
-                    "top_term_hits_[k]": top["k"] if top else 0,
-                    "top_term_bg_hits_[K]": top["K"] if top else 0,
-                    "top_q_value": top_q,
                 })
                 if not math.isnan(top_q) and top_q > 0:
                     curve_data[(axis, ns)].append((N, -math.log10(top_q)))
@@ -416,14 +419,18 @@ def run(
         sdf.to_csv(summary_path, sep="\t", index=False)
         _log(f"[write] summary.tsv rows={len(sdf)}")
 
+    # k/n/K/N/fold_enrichment/q_value sit as one contiguous block so
+    # a reviewer scanning left-to-right sees all the key hypergeometric
+    # parameters together. Ratios, raw p_value, and correction_method
+    # follow after the headline block.
     sig_cols = [
         "clade", "axis", "N_threshold", "sweep_namespace",
         "go_id", "go_name", "go_namespace",
         "foreground_hits_[k]", "foreground_size_[n]",
         "background_hits_[K]", "background_size_[N]",
+        "fold_enrichment", "q_value",
         "ratio_in_study_[k/n]", "ratio_in_pop_[K/N]",
-        "fold_enrichment",
-        "p_value", "correction_method", "q_value",
+        "p_value", "correction_method",
         "gene_ids", "gene_symbols",
     ]
     if all_significant:
