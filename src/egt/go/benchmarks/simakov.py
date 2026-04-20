@@ -187,7 +187,12 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     print("[load] Simakov microsynteny ...")
-    ms = pd.read_excel(args.microsynteny_xls, engine="calamine")
+    # Auto-pick engine by extension: openpyxl for .xlsx (dev dep),
+    # calamine for the canonical Simakov 2013 .xls (user-staged).
+    p = str(args.microsynteny_xls).lower()
+    engine = "openpyxl" if p.endswith(".xlsx") else (
+        "calamine" if p.endswith(".xls") else None)
+    ms = pd.read_excel(args.microsynteny_xls, engine=engine)
     sub = ms[ms["Species ID"] == args.species].copy()
     sub["classif_str"] = sub["Classification"].fillna("").astype(str)
     tags = [t.strip() for t in args.classification.split(",") if t.strip()]

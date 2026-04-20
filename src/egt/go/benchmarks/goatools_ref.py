@@ -28,9 +28,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from goatools.obo_parser import GODag
-from goatools.go_enrichment import GOEnrichmentStudy
-
+# goatools is a heavy optional dependency — imported lazily inside the
+# run / helper functions so `import egt.go.benchmarks.goatools_ref`
+# succeeds on envs that only install egt's core dependencies.
 
 REFSEQ_PROTEIN_RE = re.compile(r"^(NP|XP|YP)_[0-9]+\.[0-9]+$")
 NCBI_CATEGORY_MAP = {
@@ -215,6 +215,7 @@ def run_goatools_for_clade(clade, pop_assoc, obodag, foreground,
     column is what should be compared term-by-term against our q; the raw
     q_theirs is goatools' native output.
     """
+    from goatools.go_enrichment import GOEnrichmentStudy
     pop = set(pop_assoc.keys())
     fg = {g for g in foreground if g in pop}
     if not fg:
@@ -326,6 +327,7 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.out_dir)
     (out / "per_clade").mkdir(parents=True, exist_ok=True)
 
+    from goatools.obo_parser import GODag
     print("[load] OBO ..."); obodag = GODag(args.obo, prt=None)
 
     print("[load] gene2accession ...")
