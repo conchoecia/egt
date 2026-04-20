@@ -315,7 +315,7 @@ def draw_dotplot(fig_ax, terms_df, title, vmin, vmax):
         )
     fig_ax.set_yticks(ys)
     fig_ax.set_yticklabels(
-        [f"{n[:56]}" + ("…" if len(n) > 56 else "")
+        [f"{n[:44]}" + ("…" if len(n) > 44 else "")
          for n in terms_df["go_name"]],
         fontsize=7)
     fig_ax.set_xlabel("GeneRatio (k/n)", fontsize=8)
@@ -376,7 +376,11 @@ def make_dotplots(sig_df, out_path, top_n=15, min_fold=3.0, min_k=None):
             else:
                 vmin, vmax = Q_FLOOR, 1.0
 
-            fig, axes = plt.subplots(1, 3, figsize=(17, 6))
+            # Wide figure + generous inter-panel gap so BP/MF/CC GO-term
+            # labels (up to ~45 chars) sit fully in the wspace without
+            # bleeding into the panel to the left.
+            fig, axes = plt.subplots(1, 3, figsize=(22, 6))
+            fig.subplots_adjust(wspace=0.75)
             mappables = []
             per_ns_sizes = []
             for col, ns in enumerate(("BP", "MF", "CC")):
