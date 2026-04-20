@@ -25,7 +25,10 @@ def NCBI_taxid_to_taxdict(ncbi, taxid) -> dict:
     if isinstance(taxid, str):
         # first check that the taxid is an integer
         if not re.match(r"^[0-9]*$", taxid):
-            raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
+            raise ValueError(
+                f"There is a non-numeric character in the taxid string, {taxid}. Exiting."
+            )
+        taxid = int(taxid)
     elif isinstance(taxid, int):
         pass
     else:
@@ -47,17 +50,16 @@ def NCBI_taxid_to_taxdict(ncbi, taxid) -> dict:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         lineage = ncbi.get_lineage(taxid)
+    if len(lineage) == 0:
+        raise ValueError(f"The lineage is empty for the taxid {taxid}. Exiting.")
     # We're just going to ignore whatever changes were made, and we will force the last entry of the lineage
     #  to be what is in the filename.
     names = ncbi.get_taxid_translator(lineage)
+    if len(names) == 0 or lineage[-1] not in names:
+        raise ValueError(f"The names are empty for the taxid {taxid}. Exiting.")
     names[original_taxid] = names[lineage[-1]]
     lineage[-1] = original_taxid
     # ^^ now we're done fidgeting with the lineage and it should work even if the lineage has been changed since the genome was downloaded.
-    # make sure that the lineage and the names are not empty
-    if len(lineage) == 0:
-        raise ValueError(f"The lineage is empty for the taxid {taxid}. Exiting.")
-    if len(names) == 0:
-        raise ValueError(f"The names are empty for the taxid {taxid}. Exiting.")
     entry["taxname"]          = names[taxid]
     entry["taxid_list"]       = [taxid for taxid in lineage]
     entry["taxid_list_str"]   = ";".join([str(taxid) for taxid in lineage])

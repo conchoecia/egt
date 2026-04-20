@@ -1724,8 +1724,15 @@ def parse_metadata_dfs(df_filelist: list):
         # For all the columns that do not have a _color column, we will assign a color based on the values in the column.
         non_color_non_rbh_columns = [col for col in df.columns if col != "rbh" and not col.endswith("_color")]
         for thiscol in non_color_non_rbh_columns:
+            if f"{thiscol}_color" in df.columns:
+                continue
+            # Booleans should get contrasting categorical colors, not a numeric gradient.
+            if pd.api.types.is_bool_dtype(df[thiscol]):
+                tcolor = "#074FF7"
+                fcolor = "#FD6117"
+                df[f"{thiscol}_color"] = df[thiscol].map({True: tcolor, False: fcolor})
             # If the column is numeric, we will assign a gradient color
-            if pd.api.types.is_numeric_dtype(df[thiscol]):
+            elif pd.api.types.is_numeric_dtype(df[thiscol]):
                 # Get the min and max values of the column
                 vmin = df[thiscol].min()
                 vmax = df[thiscol].max()
@@ -1742,13 +1749,7 @@ def parse_metadata_dfs(df_filelist: list):
                     df[f"{thiscol}_color"] = "#000000"
                 elif len(unique_values) == 2:
                     # When there are only two things to color, blue/orange is a good contrasting choice that is colorblind-friendly.
-                    # If the column contains True/Fales values, color them with binary. In fact, if the column is boolean at all, just assign the two True/False colors randomly
-                    if set(unique_values).issubset({True, False}):
-                        # If the column is boolean, we will assign a color based on the True/False values
-                        df[f"{thiscol}_color"] = df[thiscol].map({True: tcolor, False: fcolor})
-                    else:
-                        # If there are only two unique values, we will assign tcolor or fcolor randomly
-                        df[f"{thiscol}_color"] = df[thiscol].apply(lambda x: tcolor if x == unique_values[0] else fcolor)
+                    df[f"{thiscol}_color"] = df[thiscol].apply(lambda x: tcolor if x == unique_values[0] else fcolor)
                 else:
                     # This column is not numeric and not boolean, so we will assign a random color to each unique value
                     # Generate a random color for each unique value. Use generate_random_color()

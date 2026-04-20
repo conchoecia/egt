@@ -121,8 +121,10 @@ def create_directories_recursive_notouch(path):
     if end_is_file:
         parts = parts[:-1]
 
-    current_path = ""
+    current_path = os.path.sep if os.path.isabs(path) else ""
     for part in parts:
+        if part == "":
+            continue
         current_path = os.path.join(current_path, part)
         if not os.path.exists(current_path):
             os.mkdir(current_path)
