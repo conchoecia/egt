@@ -79,6 +79,37 @@ def test_set_square_limits_and_auto_point_size():
     assert pytest.approx(xlim[1] - xlim[0]) == ylim[1] - ylim[0]
     assert plotdfs.auto_point_size(100, ax=ax) > 0
     assert plotdfs.auto_point_size(0) == 0.25
+    assert plotdfs.auto_point_size(10_000_000, min_size=0.5) == 0.5
+    assert plotdfs.auto_point_size(1, max_size=2.0) == 2.0
+    assert plotdfs.auto_point_alpha(0) == 0.84
+    assert plotdfs.auto_point_alpha(100) > plotdfs.auto_point_alpha(10000)
+    assert plotdfs.auto_point_fill(0) == 0.48
+    assert plotdfs.auto_point_fill(100) > plotdfs.auto_point_fill(10000)
+    assert 0.40 <= plotdfs.auto_point_alpha(10000) <= 0.84
+    assert 0.20 <= plotdfs.auto_point_fill(10000) <= 0.48
+    compact = plotdfs.estimate_panel_occupancy(
+        [i / 19 for i in range(20)],
+        [i / 19 for i in range(20)],
+        q=None,
+        pad=0.0,
+        bins=20,
+    )
+    spread = plotdfs.estimate_panel_occupancy(
+        [i / 4 for i in range(5) for _ in range(5)],
+        [j / 4 for _ in range(5) for j in range(5)],
+        q=None,
+        pad=0.0,
+        bins=20,
+    )
+    assert spread > compact
+    assert plotdfs.occupancy_scaled_value(
+        1.0, spread, n_points=1000, occ_ref=0.05, min_factor=0.5, max_factor=2.0
+    ) > plotdfs.occupancy_scaled_value(
+        1.0, compact, n_points=1000, occ_ref=0.05, min_factor=0.5, max_factor=2.0
+    )
+    assert plotdfs.neighbor_scaled_value(1.0, 10, 125) > plotdfs.neighbor_scaled_value(1.0, 10, 500)
+    assert plotdfs.neighbor_scaled_value(1.0, 999, 1500) > plotdfs.neighbor_scaled_value(1.0, 20, 1500)
+    assert plotdfs.neighbor_scaled_value(1.0, 20, 0) == 1.0
     plt.close(fig)
 
 

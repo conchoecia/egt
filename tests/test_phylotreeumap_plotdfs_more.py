@@ -48,6 +48,40 @@ def test_plot_phylo_resampling_grid_and_main_phylolist(tmp_path: Path):
     assert (tmp_path / "pref.phyloresample.pdf").exists()
 
 
+def test_plot_phylo_resampling_grid_additional_branches(tmp_path: Path):
+    def _df(n: int, *, color: bool) -> pd.DataFrame:
+        df = pd.DataFrame(
+            {
+                "UMAP1": [i % 17 for i in range(n)],
+                "UMAP2": [i // 17 for i in range(n)],
+            }
+        )
+        if color:
+            df["color"] = ["#123456"] * n
+        return df
+
+    df_by_rank = {
+        "phylum": {(20, 0.1): {"df": _df(125, color=True)}},
+        "subphylum": {(20, 0.1): {"df": _df(170, color=True)}},
+        "family": {(20, 0.1): {"df": _df(1500, color=False)}},
+        "genus": {(20, 0.1): {"df": pd.DataFrame(columns=["UMAP1", "UMAP2"])}} ,
+    }
+    row_labels = {rank: rank for rank in df_by_rank}
+    outpdf = tmp_path / "phylo_branches.pdf"
+    plotdfs.plot_phylo_resampling_grid(
+        df_by_rank,
+        [(20, 0.1)],
+        row_labels,
+        outpdf,
+        point_min_alpha=0.75,
+        point_max_alpha=0.95,
+    )
+    assert outpdf.exists()
+
+    with pytest.raises(ValueError, match="No ranks to plot"):
+        plotdfs.plot_phylo_resampling_grid({}, [], {}, tmp_path / "empty.pdf")
+
+
 def test_plot_phyla_writes_clean_and_annotation_outputs(tmp_path: Path):
     df = pd.DataFrame(
         {

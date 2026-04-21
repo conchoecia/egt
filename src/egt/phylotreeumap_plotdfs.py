@@ -343,11 +343,7 @@ def generate_df_dict(args):
 
     return df_dict
 
-def set_square_limits(ax, x, y, q=(0.002, 0.998), pad=0.03):
-    """
-    Set per-axis limits using optional quantile clipping, then expand to a
-    square view with a small padding. Keeps aspect='equal'.
-    """
+def _get_square_limits(x, y, q=(0.002, 0.998), pad=0.03):
     import numpy as np
     x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
 
@@ -363,9 +359,17 @@ def set_square_limits(ax, x, y, q=(0.002, 0.998), pad=0.03):
     py = (y1 - y0) * pad
     cx, cy = 0.5*(x0 + x1), 0.5*(y0 + y1)
     side = max((x1 - x0) + 2*px, (y1 - y0) + 2*py)
+    return cx - side/2, cx + side/2, cy - side/2, cy + side/2
 
-    ax.set_xlim(cx - side/2, cx + side/2)
-    ax.set_ylim(cy - side/2, cy + side/2)
+
+def set_square_limits(ax, x, y, q=(0.002, 0.998), pad=0.03):
+    """
+    Set per-axis limits using optional quantile clipping, then expand to a
+    square view with a small padding. Keeps aspect='equal'.
+    """
+    xlo, xhi, ylo, yhi = _get_square_limits(x, y, q=q, pad=pad)
+    ax.set_xlim(xlo, xhi)
+    ax.set_ylim(ylo, yhi)
     ax.set_aspect("equal", adjustable="box")
 
 def auto_point_size(
@@ -412,6 +416,152 @@ def auto_point_size(
     elif s > max_size:
         s = max_size
     return float(s)
+
+
+def auto_point_alpha(
+    n_points: int,
+    *,
+    n_ref: int = 2000,
+    alpha_ref: float = 0.50,
+    power: float = 0.27,
+    min_alpha: float = 0.40,
+    max_alpha: float = 0.84,
+) -> float:
+    """
+    Return a panel-level alpha for scatter points.
+
+    Sparse phylogenetic resampling panels have less local overplotting than dense
+    ones, so they need more opacity to reach comparable perceived intensity. The
+    defaults were tuned against the neighbors=20 phylo-resampling panels, whose
+    occupied-pixel darkness provides a good visual reference for the denser ranks.
+    """
+    if n_points <= 0:
+        return max_alpha
+
+    alpha = alpha_ref * (float(n_ref) / float(n_points)) ** power
+    if alpha < min_alpha:
+        alpha = min_alpha
+    elif alpha > max_alpha:
+        alpha = max_alpha
+    return float(alpha)
+
+
+def auto_point_fill(
+    n_points: int,
+    *,
+    n_ref: int = 2000,
+    fill_ref: float = 0.20,
+    power: float = 0.33,
+    min_fill: float = 0.20,
+    max_fill: float = 0.48,
+) -> float:
+    """
+    Return a panel-level target fill fraction for scatter points.
+
+    Sparse panels need a larger effective footprint than dense panels to keep
+    the occupied part of each subplot visually substantial. The defaults were
+    tuned against the neighbors=20 phylo-resampling grid.
+    """
+    if n_points <= 0:
+        return max_fill
+
+    fill = fill_ref * (float(n_ref) / float(n_points)) ** power
+    if fill < min_fill:
+        fill = min_fill
+    elif fill > max_fill:
+        fill = max_fill
+    return float(fill)
+
+
+def estimate_panel_occupancy(x, y, *, q=(0.002, 0.998), pad=0.03, bins=40) -> float:
+    """
+    Estimate how much of the square plotting area is occupied by points.
+
+    Values near 0 indicate a compact panel; larger values indicate a more
+    spatially spread-out point cloud.
+    """
+    import numpy as np
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) == 0:
+        return 0.0
+
+    xlo, xhi, ylo, yhi = _get_square_limits(x, y, q=q, pad=pad)
+    xn = np.clip((x - xlo) / (xhi - xlo), 0.0, 1.0)
+    yn = np.clip((y - ylo) / (yhi - ylo), 0.0, 1.0)
+    hist, _, _ = np.histogram2d(xn, yn, bins=bins, range=[[0, 1], [0, 1]])
+    return float((hist > 0).mean())
+
+
+def occupancy_scaled_value(
+    value: float,
+    occupancy: float,
+    *,
+    n_points: int,
+    min_n_points: int = 300,
+    occ_ref: float = 0.24,
+    power: float = 0.35,
+    min_factor: float = 0.92,
+    max_factor: float = 1.16,
+) -> float:
+    """
+    Scale a size/alpha control by the actual panel footprint.
+
+    Spread-out panels need more ink; compact panels need less. We only apply
+    this once a panel has enough points for occupancy to be a stable signal.
+    """
+    if n_points < min_n_points or occupancy <= 0:
+        return float(value)
+
+    factor = (occupancy / occ_ref) ** power
+    if factor < min_factor:
+        factor = min_factor
+    elif factor > max_factor:
+        factor = max_factor
+    return float(value * factor)
+
+
+def neighbor_scaled_value(
+    value: float,
+    num_neighbors: int,
+    n_points: int,
+    *,
+    min_neighbors: int = 20,
+    max_neighbors: int = 250,
+) -> float:
+    """
+    Apply a coarse banded correction based on neighbor count and panel sparsity.
+
+    This lets sparse upper ranks stay visible, tones down compact mid-sparse
+    rows, and gradually boosts spread-prone medium-density rows as n_neighbors
+    increases from left to right.
+    """
+    import math
+
+    if value <= 0 or n_points <= 0:
+        return float(value)
+
+    nn = min(max(num_neighbors, min_neighbors), max_neighbors)
+    if max_neighbors <= min_neighbors:
+        t = 0.0
+    else:
+        t = (math.log(nn) - math.log(min_neighbors)) / (math.log(max_neighbors) - math.log(min_neighbors))
+
+    if n_points <= 130:
+        factor = 1.30
+    elif n_points <= 180:
+        factor = 1.10
+    elif n_points <= 280:
+        factor = 1.01 + 0.09 * t
+    elif n_points <= 900:
+        factor = 0.92
+    elif n_points <= 3000:
+        factor = 0.96 + 0.18 * t
+    else:
+        factor = 1.0
+
+    return float(value * factor)
 
 def plot_paramsweep(df_dict, outpdf):
     """
@@ -1880,6 +2030,12 @@ def plot_phylo_resampling_grid(
     inner=0.18,               # gap between panels (inches)
     outer=0.50,               # top/bottom and RIGHT margin (inches)
     left_gutter=1.20,         # reserved space for row labels (inches)
+    point_fill=0.20,
+    point_max_fill=0.48,
+    point_min_size=0.25,
+    point_max_size=13.0,
+    point_min_alpha=0.40,
+    point_max_alpha=0.84,
     sep_color="#BBBBBB",
     sep_lw=0.6
 ):
@@ -1936,16 +2092,66 @@ def plot_phylo_resampling_grid(
         for j, key in enumerate(all_params):
             ax = axes[i][j]
             info = by_param.get(key)
+            num_neighbors, _min_dist = key
             if info is None:
                 ax.text(0.5, 0.5, "—", ha="center", va="center", fontsize=8); continue
             d = info["df"]
-            s = auto_point_size(len(d), ax=ax)
+            n_points = len(d)
+            occupancy = estimate_panel_occupancy(d["UMAP1"].values, d["UMAP2"].values)
+            fill = auto_point_fill(
+                n_points,
+                fill_ref=point_fill,
+                max_fill=point_max_fill,
+            )
+            fill = occupancy_scaled_value(
+                fill,
+                occupancy,
+                n_points=n_points,
+                power=0.45,
+                min_factor=0.90,
+                max_factor=1.22,
+            )
+            fill = neighbor_scaled_value(fill, num_neighbors, n_points)
+            if n_points <= 130:
+                fill *= 1.55
+            elif n_points <= 180:
+                fill *= 1.18
+            this_point_max_size = point_max_size
+            if n_points <= 130:
+                this_point_max_size = max(point_max_size, 24.0)
+            elif n_points <= 180:
+                this_point_max_size = max(point_max_size, 18.0)
+            s = auto_point_size(
+                n_points,
+                ax=ax,
+                target_fill=fill,
+                min_size=point_min_size,
+                max_size=this_point_max_size,
+            )
+            alpha = auto_point_alpha(
+                n_points,
+                min_alpha=point_min_alpha,
+                max_alpha=point_max_alpha,
+            )
+            alpha = occupancy_scaled_value(
+                alpha,
+                occupancy,
+                n_points=n_points,
+                power=0.30,
+                min_factor=0.93,
+                max_factor=1.10,
+            )
+            alpha = neighbor_scaled_value(alpha, num_neighbors, n_points)
+            if alpha < point_min_alpha:
+                alpha = point_min_alpha
+            elif alpha > point_max_alpha:
+                alpha = point_max_alpha
             if d.empty:
                 ax.text(0.5, 0.5, "Empty", ha="center", va="center", fontsize=6); continue
             if "color" in d.columns:
-                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=0.5, color=d["color"])
+                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=alpha, color=d["color"], rasterized=True)
             else:
-                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=0.5)
+                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=alpha, rasterized=True)
 
             # square, per-axis limits
             # quantile-based, per-axis limits; square view to not distort the umap
@@ -1962,16 +2168,42 @@ def plot_phylo_resampling_grid(
     xmin, xmax = x_axes_left / fig_w,  x_axes_right / fig_w
     ymin, ymax = y_axes_bottom / fig_h, y_axes_top   / fig_h
 
-    # vertical separators (between columns)
-    for j in range(num_cols - 1):
-        x_mid = (left_gutter + (j + 1) * panel + j * inner + inner / 2) / fig_w
-        fig.add_artist(plt.Line2D([x_mid, x_mid], [ymin, ymax],
-                                  transform=fig.transFigure, color=sep_color, lw=sep_lw))
-    # horizontal separators (between rows)
-    for i in range(num_rows - 1):
-        y_mid = (outer + (i + 1) * panel + i * inner + inner / 2) / fig_h
-        fig.add_artist(plt.Line2D([xmin, xmax], [y_mid, y_mid],
-                                  transform=fig.transFigure, color=sep_color, lw=sep_lw))
+    x_mids = [
+        (left_gutter + (j + 1) * panel + j * inner + inner / 2) / fig_w
+        for j in range(num_cols - 1)
+    ]
+    y_mids = [
+        (outer + (i + 1) * panel + i * inner + inner / 2) / fig_h
+        for i in range(num_rows - 1)
+    ]
+    x_gap = min((inner / fig_w) * 0.55, (panel / fig_w) * 0.08)
+    y_gap = min((inner / fig_h) * 0.55, (panel / fig_h) * 0.08)
+
+    # vertical separators (between columns), broken at intersections
+    for x_mid in x_mids:
+        y_start = ymin
+        for y_mid in y_mids:
+            y_stop = y_mid - y_gap / 2
+            if y_stop > y_start:
+                fig.add_artist(plt.Line2D([x_mid, x_mid], [y_start, y_stop],
+                                          transform=fig.transFigure, color=sep_color, lw=sep_lw))
+            y_start = y_mid + y_gap / 2
+        if ymax > y_start:
+            fig.add_artist(plt.Line2D([x_mid, x_mid], [y_start, ymax],
+                                      transform=fig.transFigure, color=sep_color, lw=sep_lw))
+
+    # horizontal separators (between rows), broken at intersections
+    for y_mid in y_mids:
+        x_start = xmin
+        for x_mid in x_mids:
+            x_stop = x_mid - x_gap / 2
+            if x_stop > x_start:
+                fig.add_artist(plt.Line2D([x_start, x_stop], [y_mid, y_mid],
+                                          transform=fig.transFigure, color=sep_color, lw=sep_lw))
+            x_start = x_mid + x_gap / 2
+        if xmax > x_start:
+            fig.add_artist(plt.Line2D([x_start, xmax], [y_mid, y_mid],
+                                      transform=fig.transFigure, color=sep_color, lw=sep_lw))
 
     print(f"saving the file to {outpdf}")
     # IMPORTANT: don't use bbox_inches='tight' or it will clip your gutter
