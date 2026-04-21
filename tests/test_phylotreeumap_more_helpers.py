@@ -331,7 +331,7 @@ def test_construct_lil_matrix_and_rbh_to_samplename_error_paths(tmp_path: Path):
 
     good = _write_gbgz(tmp_path / "one.gb.gz", [("fam1", "fam2", 10)])
     broken = pd.DataFrame({"dis_filepath_abs": [str(good)]}, index=[0])
-    with pytest.raises(ValueError, match="negative axis 1 index"):
+    with pytest.raises(ValueError, match="missing from alg_combo_to_ix"):
         ptu.construct_lil_matrix_from_sampledf(broken, {("fam2", "fam1"): 0})
 
     with pytest.raises(ValueError, match="does not start with the ALGname"):

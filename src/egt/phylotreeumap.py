@@ -2919,6 +2919,16 @@ def construct_lil_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix =
     stop = time.time()
     print("{}It took {} seconds to add the col_indices column with map".format(print_prefix, stop - start))
 
+    # Fail explicitly when an observed RBH pair is absent from the locus-index
+    # map. Relying on sparse-matrix construction to reject NaN/object indices
+    # is platform-dependent and caused macOS CI to miss this error path.
+    if concatdf["col_indices"].isna().any():
+        missing_pairs = sorted({pair for pair, ix in zip(concatdf["pair"], concatdf["col_indices"]) if pd.isna(ix)})
+        raise ValueError(
+            "One or more RBH pairs are missing from alg_combo_to_ix: "
+            f"{missing_pairs[:5]}"
+        )
+
     sparse_matrix = coo_matrix(( concatdf["distance"],
                                 (concatdf["row_indices"], concatdf["col_indices"])),
                                 shape = (len(sampledf), len(alg_combo_to_ix)))
