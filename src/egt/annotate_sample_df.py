@@ -126,10 +126,10 @@ def gen_data_availability_statement(sample_df_filepath, outfilepath):
             thisac = accessions[-1]
             an = thisac[0:3] + "_" + thisac[3:]
             html_content += f"<a href='https://www.ncbi.nlm.nih.gov/datasets/genome/{an}'>{an}</a>), "
-        counter += 1
+            counter += 1
     # replace the last ", " with a period
     html_content = html_content[:-2] + "."
-    if counter > 1:
+    if counter > 1 and ")," in html_content:
         # find the last occurrence of ")," and replace it with "), and "
         html_content = html_content.rsplit("),", 1)[0] + "), and " + html_content.rsplit("),", 1)[1]
     html_content += " Genomes downloaded from other sources were: "
@@ -149,9 +149,10 @@ def gen_data_availability_statement(sample_df_filepath, outfilepath):
             thisac = accessions[-1]
             an = thisac[0:3] + "_" + thisac[3:]
             html_content += f"{an}), "
+            counter += 1
     # replace the last ", " with a period
     html_content = html_content[:-2] + "."
-    if counter > 1:
+    if counter > 1 and ")," in html_content:
         # find the last occurrence of ")," and replace it with "), and "
         html_content = html_content.rsplit("),", 1)[0] + "), and " + html_content.rsplit("),", 1)[1]
 

@@ -876,12 +876,20 @@ def create_directories_if_not_exist(file_path):
     This takes an iterable of file paths or directories for which we want to safely create the directories.
     """
     print("requested file path: ", file_path)
+    target_path = file_path
+    basename = os.path.basename(file_path)
+    if basename and os.path.splitext(basename)[1]:
+        target_path = os.path.dirname(file_path)
+    if target_path == "":
+        return
     # Split the path into directories
-    directories = file_path.split(os.sep)
+    directories = target_path.split(os.sep)
 
     # Iterate over each directory and create if it doesn't exist
-    path_so_far = ''
+    path_so_far = os.sep if os.path.isabs(target_path) else ''
     for directory in directories:
+        if directory == "":
+            continue
         path_so_far = os.path.join(path_so_far, directory)
         if not os.path.exists(path_so_far):
             os.makedirs(path_so_far)
@@ -1527,7 +1535,7 @@ def mgt_mlt_plot_HTML(
         table_selection_callback = bokeh.models.CustomJS(args=dict(
             source=source,
             filtered_source=filtered_source,
-        ), code="""
+        ), code=r"""
             console.log('Table selection callback triggered');
             var selected_table_rows = filtered_source.selected.indices;
             console.log('Selected table rows:', selected_table_rows);
@@ -1632,7 +1640,7 @@ def mgt_mlt_plot_HTML(
             rank_text=rank_text,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
-        ), code="""
+        ), code=r"""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var rbh_input = search_rbh.value.trim().toLowerCase();
