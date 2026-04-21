@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -73,8 +75,11 @@ def test_image_helpers_and_image_composition():
     left = paf.image_vertical_barrier(2, 3, "#ffffff")
     right = paf.image_vertical_barrier(1, 2, "#000000")
     hcat = paf.image_concatenate_horizontally([left, right], valign="bottom")
+    centered = paf.image_concatenate_horizontally([left, right], valign="center")
     vcat = paf.image_concatenate_vertically([left, right])
     assert hcat.size == (3, 3)
+    assert centered.size == (3, 3)
+    assert centered.getpixel((2, 0)) == (0, 0, 0)
     assert vcat.size == (2, 5)
 
 
@@ -86,6 +91,13 @@ def test_parse_args_validates_inputs(tmp_path: Path):
 
     args = paf.parse_args(["-d", str(directory), "-a", "ALG", "-r", str(alg_rbh)])
     assert args.ALGname == "ALG"
+
+    with pytest.raises(ValueError, match="tree info file"):
+        paf.parse_args(
+            ["-d", str(directory), "-a", "ALG", "-r", str(alg_rbh), "-t", str(tmp_path / "missing.tsv")]
+        )
+    with pytest.raises(ValueError, match="directory .* does not exist"):
+        paf.parse_args(["-d", str(tmp_path / "missingdir"), "-a", "ALG", "-r", str(alg_rbh)])
 
 
 def test_parse_alg_fusions_and_plot(tmp_path: Path):
@@ -119,6 +131,41 @@ def test_parse_alg_fusions_and_plot(tmp_path: Path):
 
     paf.plot_ALG_fusions(fusion_df, alg_df, "ALG", outprefix=str(tmp_path / "fusion_plot"))
     assert (tmp_path / "fusion_plot_ALG_fusions.pdf").exists()
+
+
+def test_parse_alg_fusions_validation_errors(tmp_path: Path):
+    alg_df = pd.DataFrame({"ALGname": ["A"], "Color": ["#aa0000"], "Size": [10]})
+
+    missing_alg_cols = tmp_path / "missing_alg_cols.rbh"
+    pd.DataFrame(
+        {
+            "rbh": ["r1"],
+            "gene_group": ["A"],
+            "color": ["#111111"],
+            "Species_scaf": ["chr1"],
+            "Species_gene": ["g1"],
+            "Species_pos": [5],
+            "whole_FET": [0.001],
+        }
+    ).to_csv(missing_alg_cols, sep="\t", index=False)
+    with pytest.raises(IOError, match="correct columns for the ALG"):
+        paf.parse_ALG_fusions([str(missing_alg_cols)], alg_df, "ALG", minsig=0.01)
+
+    missing_species_cols = tmp_path / "missing_species_cols.rbh"
+    pd.DataFrame(
+        {
+            "rbh": ["r1"],
+            "gene_group": ["A"],
+            "color": ["#111111"],
+            "ALG_scaf": ["alg1"],
+            "ALG_gene": ["ag1"],
+            "ALG_pos": [1],
+            "Species_scaf": ["chr1"],
+            "whole_FET": [0.001],
+        }
+    ).to_csv(missing_species_cols, sep="\t", index=False)
+    with pytest.raises(IOError, match="correct columns for the species"):
+        paf.parse_ALG_fusions([str(missing_species_cols)], alg_df, "ALG", minsig=0.01)
 
 
 def test_phylogeny_and_lineage_image_helpers(monkeypatch):
@@ -227,6 +274,38 @@ def test_standard_plot_out_validates_taxid_order(tmp_path: Path):
         paf.standard_plot_out(perspchrom, str(tmp_path / "plot"), taxid_order=[9], safe=True)
 
 
+def test_standard_plot_out_filters_missing_taxids_when_not_safe(tmp_path: Path, monkeypatch):
+    perspchrom = pd.DataFrame(
+        {
+            "species": ["sp1", "sp2"],
+            "taxid": [1, 2],
+            "taxidstring": ["1;10197", "1;6040"],
+            "A": [1, 0],
+            ("A", "B"): [0, 1],
+        }
+    )
+
+    monkeypatch.setattr(
+        paf,
+        "image_sp_matrix_to_lineage",
+        lambda _series: paf.image_vertical_barrier(2, len(_series), "#111111"),
+    )
+    monkeypatch.setattr(
+        paf,
+        "image_sp_matrix_to_presence_absence",
+        lambda _df, color_dict=None: paf.image_vertical_barrier(2, len(_df), "#222222"),
+    )
+    monkeypatch.setattr(
+        paf,
+        "image_colocalization_matrix",
+        lambda _df, clustering, color_dict=None, missing_data_color="#5d001e": paf.image_vertical_barrier(
+            1, len(_df), "#333333"
+        ),
+    )
+    paf.standard_plot_out(perspchrom, str(tmp_path / "ordered_plot"), taxid_order=[9, 2], safe=False)
+    assert (tmp_path / "ordered_plot_composite_image.png").exists()
+
+
 def test_rbh_files_to_locdf_and_perspchrom_filters_missing_calibrated_taxa(tmp_path: Path, monkeypatch):
     rbh1 = tmp_path / "SpeciesA-101-GCA1.rbh"
     rbh2 = tmp_path / "SpeciesB-202-GCA1.rbh"
@@ -294,3 +373,140 @@ def test_rbh_files_to_locdf_and_perspchrom_filters_missing_calibrated_taxa(tmp_p
     coloc_value = perspchrom[[("A", "B")]].iloc[0, 0]
     assert coloc_value == 1
     assert (tmp_path / "missing_taxa_from_calibrated_tree.txt").exists()
+
+
+def test_compute_changestring_for_species_and_batch_loading(tmp_path: Path):
+    perspchrom = pd.DataFrame(
+        {
+            "species": ["target", "sister", "outgroup"],
+            "taxidstring": ["1;2;3", "1;2;4", "1;5"],
+            "A": [1, 1, 0],
+            "B": [0, 1, 1],
+            ("A", "B"): [0, 0, 0],
+        }
+    )
+    row = perspchrom.iloc[0]
+
+    changestring, was_loaded = paf.compute_changestring_for_species(
+        row,
+        perspchrom,
+        ALG_columns=["A", "B"],
+        ALG_combos=[("A", "B")],
+        min_for_missing=0.8,
+        min_for_noncolocalized=0.5,
+        checkpoint_dir=str(tmp_path),
+        ALG_node="1",
+    )
+    assert was_loaded is False
+    assert changestring.startswith("1-")
+    assert "['B']" in changestring
+
+    loaded_changestring, loaded_flag = paf.compute_changestring_for_species(
+        row,
+        perspchrom,
+        ALG_columns=["A", "B"],
+        ALG_combos=[("A", "B")],
+        min_for_missing=0.8,
+        min_for_noncolocalized=0.5,
+        checkpoint_dir=str(tmp_path),
+        ALG_node="1",
+    )
+    assert loaded_flag is True
+    assert loaded_changestring == changestring
+
+    batch = paf.process_species_batch(
+        (
+            [0],
+            perspchrom,
+            ["A", "B"],
+            [("A", "B")],
+            0.8,
+            0.5,
+            str(tmp_path),
+            "1",
+        )
+    )
+    assert batch == [(0, changestring, True)]
+
+
+def test_save_umap_plotly_and_matplotlib(monkeypatch, tmp_path: Path):
+    tree_df = pd.DataFrame(
+        {
+            "metric1": [0.0, 1.0, 2.0],
+            "metric2": [2.0, 1.0, 0.0],
+            "color": ["#111111", "#222222", "#333333"],
+        },
+        index=["node", "sp-1", "sp-2"],
+    )
+
+    class FakeReducer:
+        def fit_transform(self, X):
+            return np.column_stack([np.arange(len(X), dtype=float), np.arange(len(X), dtype=float) + 0.5])
+
+    monkeypatch.setattr(paf.umap, "UMAP", lambda: FakeReducer())
+    monkeypatch.setattr(np.random, "normal", lambda loc, scale, shape: np.zeros(shape))
+
+    written = []
+
+    class FakeFig:
+        def write_html(self, path):
+            written.append(path)
+
+    fake_px = types.SimpleNamespace(scatter=lambda *args, **kwargs: FakeFig())
+    sys.modules["plotly"] = types.ModuleType("plotly")
+    sys.modules["plotly.express"] = fake_px
+
+    paf.save_UMAP_plotly(tree_df, str(tmp_path / "umap"))
+    assert str(tmp_path / "umap.withnodes.html") in written
+    assert str(tmp_path / "umap.withoutnodes.html") in written
+
+    scatter_calls = []
+    monkeypatch.setattr(plt, "scatter", lambda *args, **kwargs: scatter_calls.append((args, kwargs)))
+    monkeypatch.setattr(plt, "show", lambda: None)
+    paf.save_UMAP(tree_df)
+    assert scatter_calls
+
+
+def test_main_uses_cached_inputs_and_generates_changestrings(tmp_path: Path, monkeypatch):
+    rbhs = tmp_path / "rbhs"
+    rbhs.mkdir()
+    (rbhs / "dummy.rbh").write_text("placeholder\n")
+
+    pd.DataFrame({"sample": ["s1"], "gene_group": ["A"]}).to_csv(tmp_path / "locdf.tsv", sep="\t", index=False)
+    perspchrom = pd.DataFrame(
+        {
+            "species": ["target"],
+            "taxid": [999],
+            "taxidstring": ["1;131567;2759;33154;33208;999"],
+            "A": [1],
+            "B": [0],
+            "('A', 'B')": [0],
+        }
+    )
+    perspchrom.to_csv(tmp_path / "perspchrom.tsv", sep="\t", index=False)
+    pd.DataFrame({"metric": [1], "color": ["#111111"]}, index=["node"]).to_csv(
+        tmp_path / "tree1.tsv.gz", sep="\t", compression="gzip"
+    )
+
+    args = type(
+        "Args",
+        (),
+        {
+            "directory": str(rbhs),
+            "ALG_rbh": str(tmp_path / "ALG.rbh"),
+            "minsig": 0.01,
+            "ALGname": "ALG",
+            "tree_info": None,
+            "parallel": False,
+            "ncores": 1,
+        },
+    )()
+    monkeypatch.setattr(paf, "parse_args", lambda argv=None: args)
+    monkeypatch.setattr(paf, "save_UMAP_plotly", lambda *args, **kwargs: None)
+    monkeypatch.chdir(tmp_path)
+
+    assert paf.main([]) == 0
+    saved = pd.read_csv(tmp_path / "per_species_ALG_presence_fusions.tsv", sep="\t")
+    assert "changestrings" in saved.columns
+    assert "['B']" in saved.loc[0, "changestrings"]
+    assert (tmp_path / "changestring_checkpoints" / "target.txt").exists()

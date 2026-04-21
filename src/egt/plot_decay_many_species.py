@@ -134,7 +134,10 @@ def filelist_to_plot_data_structure(filelist, bins):
         #  even if they have 0 genes in them
         for thisALG in ALG_sizes:
             if thisALG not in thisdf["ALG"].tolist():
-                thisdf = thisdf.append({"ALG": thisALG, "total": ALG_sizes[thisALG]}, ignore_index=True)
+                thisdf = pd.concat(
+                    [thisdf, pd.DataFrame([{"ALG": thisALG, "total": ALG_sizes[thisALG]}])],
+                    ignore_index=True,
+                )
                 print_now = True
 
         # assert that the length of the dataframe is the length of the ALG_sizes dictionary

@@ -170,7 +170,7 @@ def test_run_end_to_end_writes_expected_files(tmp_path, loaded_refs):
                 "fold_enrichment", "q_value",
                 "ratio_in_study_[k/n]", "ratio_in_pop_[K/N]",
                 "p_value", "correction_method",
-                "gene_ids", "gene_symbols"]
+                "gene_ids", "gene_symbols", "bcns_families"]
     assert list(sig.columns) == expected
 
 

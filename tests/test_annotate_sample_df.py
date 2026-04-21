@@ -90,6 +90,31 @@ def test_data_availability_and_annotation_stats(monkeypatch, tmp_path: Path):
     assert parsed["from_rbh"] is True
 
 
+def test_data_availability_validation_and_multiple_local_accessions(tmp_path: Path):
+    with pytest.raises(ValueError, match="must end in .html"):
+        asd.gen_data_availability_statement("sample.tsv", str(tmp_path / "bad.txt"))
+
+    sampledf = tmp_path / "locals.tsv"
+    pd.DataFrame(
+        {
+            "sample": [
+                "Gamma-333-LOCALA",
+                "Gamma-333-LOCALB",
+                "Delta-444-GCF123456.1",
+            ],
+            "taxname": ["Gamma species", "Gamma species", "Delta species"],
+            "taxid": [333, 333, 444],
+        }
+    ).to_csv(sampledf, sep="\t")
+
+    html = tmp_path / "locals.html"
+    asd.gen_data_availability_statement(str(sampledf), str(html))
+    text = html.read_text()
+    assert "LOC_ALA" in text
+    assert "LOC_ALB" in text
+    assert "GCF_123456.1" in text
+
+
 def test_gen_genome_stats_and_plot_decay(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         asd.fasta,
@@ -124,6 +149,21 @@ def test_gen_genome_stats_and_plot_decay(monkeypatch, tmp_path: Path):
         asd.plot_decay(plt.subplots()[1], df, {}, "absolute")
 
 
+def test_stats_filepath_and_plot_decay_validation(tmp_path: Path):
+    stats = tmp_path / "stats.txt"
+    stats.write_text("count: 5\ntruth: False\nname: value\n")
+    parsed = asd.stats_filepath_to_dict(stats)
+    assert parsed == {"count": 5, "truth": False, "name": "value"}
+
+    fig, ax = plt.subplots()
+    df = pd.DataFrame({"frac_ologs_A": [0.1], "sample": ["s1"]})
+    with pytest.raises(ValueError, match="must be either 'absolute' or 'ranked', or 'boxplot'"):
+        asd.plot_decay(ax, df, {"A": 10}, "badmode")
+    with pytest.raises(ValueError, match="missing from the df_dict"):
+        asd.plot_decay(ax, pd.DataFrame({"sample": ["s1"]}), {"A": 10}, "absolute")
+    plt.close(fig)
+
+
 def test_bin_and_plot_decay(monkeypatch, tmp_path: Path):
     algrbh = tmp_path / "alg.rbh"
     stats = tmp_path / "rbhstats.tsv"
@@ -144,3 +184,55 @@ def test_bin_and_plot_decay(monkeypatch, tmp_path: Path):
     )
     asd.bin_and_plot_decay(str(algrbh), str(stats), str(outpdf), "ALG", num_bins=2)
     assert outpdf.exists()
+
+
+def test_bin_and_plot_decay_validation_and_taxid_boolean(tmp_path: Path):
+    missing = tmp_path / "missing.tsv"
+    with pytest.raises(ValueError, match="does not exist"):
+        asd.bin_and_plot_decay(str(missing), str(missing), str(tmp_path / "out.pdf"), "ALG")
+
+    algrbh = tmp_path / "alg.rbh"
+    stats = tmp_path / "stats.tsv"
+    algrbh.write_text("x\n")
+    stats.write_text("sample\tfrac_ologs_sig\n")
+
+    with pytest.raises(ValueError, match="ALGname must be a string"):
+        asd.bin_and_plot_decay(str(algrbh), str(stats), str(tmp_path / "out.pdf"), 5)
+    with pytest.raises(ValueError, match="num_bins must be an int"):
+        asd.bin_and_plot_decay(str(algrbh), str(stats), str(tmp_path / "out.pdf"), "ALG", num_bins=1.5)
+
+    assert asd.taxid_list_include_exclude_boolean([1, 2, 3], [2], [9]) is True
+    assert asd.taxid_list_include_exclude_boolean("[1, 2, 3]", [2], [3]) is False
+
+
+def test_plot_umap_highlight_subclade_and_main(tmp_path: Path):
+    df = pd.DataFrame(
+        {
+            "UMAP1": [0.0, 1.0],
+            "UMAP2": [1.0, 0.0],
+            "color": ["#111111", "#222222"],
+            "taxid_list": ["[1, 2, 3]", "[1, 4, 5]"],
+        }
+    )
+    infile = tmp_path / "umap.tsv"
+    df.to_csv(infile, sep="\t", index=False)
+    outpdf = tmp_path / "highlight.pdf"
+    asd.plot_UMAP_highlight_subclade(str(infile), "Title", [2], [9], str(outpdf))
+    assert outpdf.exists()
+
+    with pytest.raises(ValueError, match="must be a string"):
+        asd.plot_UMAP_highlight_subclade(123, "Title", [2], [9], str(outpdf))
+    with pytest.raises(ValueError, match="taxids_to_include must be a list"):
+        asd.plot_UMAP_highlight_subclade(str(infile), "Title", "2", [9], str(outpdf))
+    with pytest.raises(ValueError, match="title must be a string"):
+        asd.plot_UMAP_highlight_subclade(str(infile), 5, [2], [9], str(outpdf))
+    with pytest.raises(ValueError, match="taxids_to_exclude must be a list"):
+        asd.plot_UMAP_highlight_subclade(str(infile), "Title", [2], "9", str(outpdf))
+    with pytest.raises(ValueError, match="pdfout must be a string"):
+        asd.plot_UMAP_highlight_subclade(str(infile), "Title", [2], [9], 5)
+    with pytest.raises(ValueError, match="must be integers"):
+        asd.plot_UMAP_highlight_subclade(str(infile), "Title", ["2"], [9], str(outpdf))
+    with pytest.raises(ValueError, match="does not exist"):
+        asd.plot_UMAP_highlight_subclade(str(tmp_path / "missing.tsv"), "Title", [2], [9], str(outpdf))
+
+    assert asd.main([]) == 0

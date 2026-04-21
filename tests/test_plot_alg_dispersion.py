@@ -29,6 +29,31 @@ def test_parse_args_and_metadata_helpers(monkeypatch, tmp_path: Path):
     parsed = pad.parse_metadata(str(meta))
     assert parsed["sp1"] == "Taxon1;Taxon2"
 
+    csv_meta = tmp_path / "meta.csv"
+    pd.DataFrame({"species": ["sp2"], "taxidstring": [pd.NA]}).to_csv(csv_meta, index=False)
+    parsed_csv = pad.parse_metadata(str(csv_meta))
+    assert parsed_csv["sp2"] == "Unknown"
+
+
+def test_parse_args_and_metadata_validation_errors(tmp_path: Path):
+    alg_rbh = tmp_path / "alg.rbh"
+    alg_rbh.write_text("x\n")
+
+    with pytest.raises(SystemExit):
+        pad.parse_args(["-d", str(tmp_path / "missing"), "-a", str(alg_rbh)])
+    with pytest.raises(SystemExit):
+        pad.parse_args(["-d", str(tmp_path), "-a", str(tmp_path / "missing.rbh")])
+
+    bad_meta = tmp_path / "bad_meta.tsv"
+    pd.DataFrame({"wrong": ["sp1"], "taxidstring": ["1;2"]}).to_csv(bad_meta, sep="\t", index=False)
+    with pytest.raises(SystemExit):
+        pad.parse_metadata(str(bad_meta))
+
+    bad_meta2 = tmp_path / "bad_meta2.tsv"
+    pd.DataFrame({"species": ["sp1"], "wrong": ["1;2"]}).to_csv(bad_meta2, sep="\t", index=False)
+    with pytest.raises(SystemExit):
+        pad.parse_metadata(str(bad_meta2))
+
 
 def test_species_file_discovery_and_conservation_calc(monkeypatch, tmp_path: Path):
     f1 = tmp_path / "BCnSSimakov2022_SpeciesA_xy_reciprocal_best_hits.plotted.rbh"
@@ -48,6 +73,17 @@ def test_species_file_discovery_and_conservation_calc(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(pad.pd, "read_csv", lambda *_args, **_kwargs: df.copy())
     cons = pad.calculate_alg_conservation_per_species("ignored", "ALG", ["A", "B", "C"], minsig=0.05)
     assert cons == {"A": 1, "B": 1, "C": 0}
+
+    monkeypatch.setattr(pad.pd, "read_csv", lambda *_args, **_kwargs: pd.DataFrame())
+    assert pad.calculate_alg_conservation_per_species("ignored", "ALG", ["A"], minsig=0.05) == {}
+
+    no_sig = pd.DataFrame({"whole_FET": [0.9], "gene_group": ["A"], "Species_gene": ["g1"]})
+    monkeypatch.setattr(pad.pd, "read_csv", lambda *_args, **_kwargs: no_sig.copy())
+    assert pad.calculate_alg_conservation_per_species("ignored", "ALG", ["A"], minsig=0.05) == {}
+
+    no_species_cols = pd.DataFrame({"whole_FET": [0.001], "gene_group": ["A"]})
+    monkeypatch.setattr(pad.pd, "read_csv", lambda *_args, **_kwargs: no_species_cols.copy())
+    assert pad.calculate_alg_conservation_per_species("ignored", "ALG", ["A"], minsig=0.05) == {}
 
 
 def test_plot_dispersion_by_alg_and_main(monkeypatch, tmp_path: Path):

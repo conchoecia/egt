@@ -28,9 +28,10 @@ def resize_image(original_image, resize_factor):
     rf = resize_factor
     af = int(resize_factor/2)
     # Resize the image to 1/4 of its original size
-    resized_image = original_image.resize((original_image.width // rf, original_image.height // rf))
+    resized_image = original_image.resize((max(1, original_image.width // rf), max(1, original_image.height // rf)))
     # Average every four pixels
-    resized_image = resized_image.resize((resized_image.width // af, resized_image.height // af), Image.ANTIALIAS)
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    resized_image = resized_image.resize((max(1, resized_image.width // af), max(1, resized_image.height // af)), resample)
     return resized_image
 
 def plot_coo_matrix(coomatrixpath) -> Image:
@@ -124,7 +125,7 @@ def plot_coo_matrix(coomatrixpath) -> Image:
         img_rowSort_colSort.putpixel((   new_col, new_row),    (255, cv, cv))
 
     img_rowUn_colUn     =resize_image(img_rowUn_colUn    , 4)
-    img_rowUn_colSorto  =resize_image(img_rowUn_colSorto , 4)
+    img_rowUn_colSort   =resize_image(img_rowUn_colSort  , 4)
     img_rowSort_colUn   =resize_image(img_rowSort_colUn  , 4)
     img_rowSort_colSort =resize_image(img_rowSort_colSort, 4)
 
@@ -134,6 +135,11 @@ def plot_coo_matrix(coomatrixpath) -> Image:
     img_rowSort_colUn.save(  "coo_matrix_rowSort_colUn.png")
     img_rowSort_colSort.save("coo_matrix_rowSort_colSort.png")
 
+def main(argv=None):
+    coopath = "allsamples.coo.npz"
+    plot_coo_matrix(coopath)
+    return 0
 
-coopath = "allsamples.coo.npz"
-plot_coo_matrix(coopath)
+
+if __name__ == "__main__":
+    raise SystemExit(main())

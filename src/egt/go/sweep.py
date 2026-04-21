@@ -192,6 +192,16 @@ def harvest_significant_terms(
     stab, close = _axis_orders(df)
     go_names = go_names or {}
     gene_to_symbol = gene_to_symbol or {}
+    # Reverse index: GeneID -> sorted list of BCnS family IDs that map to it.
+    # A given human GeneID can come from >1 BCnS family (paralog collapse);
+    # preserve all of them, pipe-joined, so the supplementary table records
+    # the full provenance for each hit gene.
+    gene_to_fams: dict[str, list[str]] = {}
+    for fam, genes in fam_to_genes.items():
+        for g in genes:
+            gene_to_fams.setdefault(g, []).append(fam)
+    for g in gene_to_fams:
+        gene_to_fams[g] = sorted(set(gene_to_fams[g]))
 
     for axis in ("stability", "closeness", "intersection"):
         cells = sorted({
@@ -225,6 +235,9 @@ def harvest_significant_terms(
                         if rr["go_id"] in background_to_terms[g]
                     )
                     hit_symbols = [gene_to_symbol.get(g, g) for g in hit_genes]
+                    hit_families = [
+                        "|".join(gene_to_fams.get(g, [])) for g in hit_genes
+                    ]
                     k_val = int(rr["k"]); n_val = int(rr["n"])
                     K_val = int(rr["K"]); N_val = int(rr["N"])
                     out.append({
@@ -247,6 +260,7 @@ def harvest_significant_terms(
                         "q_value": rr["q"],
                         "gene_ids": ";".join(hit_genes),
                         "gene_symbols": ";".join(hit_symbols),
+                        "bcns_families": ";".join(hit_families),
                     })
                     if rr["go_id"] in seen_terms_this_cell:
                         continue
@@ -334,7 +348,11 @@ def run(
       correction_method,       # constant "fdr_bh" per row
       q_value,                 # BH-adjusted p-value
       gene_ids,                # ';'-joined Entrez GeneIDs driving k
-      gene_symbols             # ';'-joined HGNC symbols (same order)
+      gene_symbols,            # ';'-joined HGNC symbols (same order)
+      bcns_families            # ';'-joined BCnS ALG family IDs (same
+                               #   order as gene_ids); an entry may be
+                               #   '|'-joined when a GeneID maps to >1
+                               #   BCnS family (paralog collapse)
 
     When `obo` is supplied the `go_name` column is populated from the
     ontology file; otherwise it is empty. The `gene_symbols` column is
@@ -431,7 +449,7 @@ def run(
         "fold_enrichment", "q_value",
         "ratio_in_study_[k/n]", "ratio_in_pop_[K/N]",
         "p_value", "correction_method",
-        "gene_ids", "gene_symbols",
+        "gene_ids", "gene_symbols", "bcns_families",
     ]
     if all_significant:
         sig_df = pd.DataFrame(all_significant).drop_duplicates(

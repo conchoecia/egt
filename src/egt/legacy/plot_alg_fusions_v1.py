@@ -47,11 +47,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from scipy.cluster import hierarchy
 
 # import odp-specific functions
-import source.rbh_tools as rbh_tools
-
-# get the warnings
-import warnings
-warnings.filterwarnings('error')
+from egt import rbh_tools
 
 # plotting options
 import matplotlib.pyplot as plt

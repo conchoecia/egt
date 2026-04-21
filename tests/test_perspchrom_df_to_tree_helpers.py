@@ -151,3 +151,365 @@ def test_generate_trace_panel_and_phylo_tree_helpers(tmp_path, monkeypatch):
     outfile = tmp_path / "nodes.tsv"
     pdt.generate_node_taxid_file_from_per_sp_chrom_df(df, outfile)
     assert "1\tname_1" in outfile.read_text()
+
+
+def test_stats_df_to_loss_fusion_dfs_and_trace_cache_builder(tmp_path, monkeypatch):
+    algdf = pd.DataFrame(
+        {
+            "ALGname": ["A", "B", "C"],
+            "Color": ["#aa0000", "#00aa00", "#0000aa"],
+            "Size": [10, 20, 5],
+        }
+    )
+    perspchrom = pd.DataFrame(
+        {
+            "species": ["sp1", "sp2"],
+            "changestrings": [
+                "1-([('A', 'B')]|['C']|[])-2",
+                "1-([('A', 'B')]|[]|[])-2",
+            ],
+        }
+    )
+
+    dispersion_df, coloc_df, alg_coloc_df = pdt.stats_df_to_loss_fusion_dfs(perspchrom, algdf, obs_seed=1)
+    assert list(dispersion_df["thisloss"]) == ["C"]
+    assert list(coloc_df["thiscoloc"]) == [("A", "B")]
+    assert list(alg_coloc_df["thiscolor"]) == [("A", "B")]
+
+    def fake_sample(self, frac=1, random_state=None):
+        return self.iloc[::-1].reset_index(drop=True)
+
+    monkeypatch.setattr(pd.DataFrame, "sample", fake_sample)
+    _, _, randomized_algs = pdt.stats_df_to_loss_fusion_dfs(
+        perspchrom.iloc[[0]],
+        algdf,
+        obs_seed=1,
+        randomize_ALGs=True,
+    )
+    assert len(randomized_algs) == 1
+
+    cached = {2: {("ALG", "frac", "abs"): {"lines": {"x": {"num_sim": [5], "value": [1.0]}}, "num_sims": 5}}}
+    monkeypatch.setattr(pdt, "is_trace_cache_stale", lambda files: False)
+    monkeypatch.setattr(pdt, "load_trace_cache_from_file", lambda: cached)
+    assert pdt.precompute_trace_cache(["dummy.tsv"], type("T", (), {"G": nx.DiGraph()})(), [2]) == cached
+
+    sim_files = []
+    for idx in range(3):
+        sim = tmp_path / f"sim_{idx}.tsv"
+        pd.DataFrame(
+            {
+                "ALG_num": ["ALG", "ALG"],
+                "size_frac": ["frac", "frac"],
+                "abs_CC": ["abs", "abs"],
+                "branch": ["(1, 2)", "(1, 2)"],
+                "bin": ["b1", "b1"],
+                "ob_ex": ["observed", "expected"],
+                "counts": [2, 1],
+                "obs_count": [1, 1],
+            }
+        ).to_csv(sim, sep="\t", index=False)
+        sim_files.append(str(sim))
+
+    class FakeTree:
+        def __init__(self):
+            self.G = nx.DiGraph()
+            self.G.add_node(2)
+
+        def get_edges_in_clade(self, taxid):
+            return [(1, 2)] if taxid == 2 else []
+
+    saved = {}
+    monkeypatch.setattr(pdt, "is_trace_cache_stale", lambda files: True)
+    monkeypatch.setattr(pdt, "save_trace_cache_to_file", lambda cache: saved.setdefault("cache", cache))
+    built = pdt.precompute_trace_cache(sim_files, FakeTree(), [2, 99])
+    assert ("ALG", "frac", "abs") in built[2]
+    assert built[2][("ALG", "frac", "abs")]["num_sims"] == 3
+    assert built[2][("ALG", "frac", "abs")]["lines"]["b1"]["value"][-1] > 0
+    assert saved["cache"][2][("ALG", "frac", "abs")]["num_sims"] == 3
+
+
+def test_generate_trace_panel_validation_and_file_fallback(tmp_path):
+    fig, ax = plt.subplots()
+    with pytest.raises(Exception, match="ALG_num must be either ALG or num"):
+        pdt.generate_trace_panel(ax, [], [], "bad", "frac", "abs")
+    with pytest.raises(Exception, match="frac_or_size must be either frac or size"):
+        pdt.generate_trace_panel(ax, [], [], "ALG", "bad", "abs")
+    with pytest.raises(Exception, match="abs_CC must be either abs or CC"):
+        pdt.generate_trace_panel(ax, [], [], "ALG", "frac", "bad")
+    plt.close(fig)
+
+    sim = tmp_path / "trace.tsv"
+    pd.DataFrame(
+        {
+            "ALG_num": ["ALG", "ALG"],
+            "size_frac": ["frac", "frac"],
+            "abs_CC": ["abs", "abs"],
+            "branch": ["(1, 2)", "(1, 2)"],
+            "bin": ["b1", "b1"],
+            "ob_ex": ["observed", "expected"],
+            "counts": [4, 2],
+            "obs_count": [3, 3],
+        }
+    ).to_csv(sim, sep="\t", index=False)
+
+    fig, ax = plt.subplots()
+    pdt.generate_trace_panel(ax, ["(1, 2)"], [str(sim)], "ALG", "frac", "abs", trace_cache=None)
+    assert ax.get_xlim()[1] == 3
+    plt.close(fig)
+
+
+def test_simulation_plot_workers_and_heatmap_orchestration(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "simulations").mkdir()
+    algdf = pd.DataFrame({"ALGname": ["A"], "Color": ["#aa0000"], "Size": [1]})
+    plotdf_sumdf = pd.DataFrame(
+        {
+            "ALG_num": ["num", "num", "ALG", "ALG"],
+            "bin": ["b1", "b1", "b2", "b2"],
+            "ob_ex": ["observed", "expected", "observed", "expected"],
+            "size_frac": ["frac", "frac", "size", "size"],
+            "abs_CC": ["abs", "abs", "abs", "abs"],
+            "counts": [2, 1, 3, 2],
+        }
+    )
+
+    class FakeTree:
+        def __init__(self):
+            self.G = nx.DiGraph()
+            self.G.add_node(2, taxname="Clade")
+
+        def get_edges_in_clade(self, taxid):
+            return [(1, 2)]
+
+        def build_tree_from_per_sp_chrom_df(self, _df):
+            return 0
+
+        def add_taxname_to_all_nodes(self):
+            return 0
+
+    monkeypatch.setattr(pdt, "NCBITaxa", lambda: FakeNCBI())
+    monkeypatch.setattr(pdt, "gen_square_ax_and_colorbar", lambda *args, **kwargs: ([0, 0, 0.1, 0.1], [0.11, 0, 0.02, 0.1]))
+    monkeypatch.setattr(pdt, "gen_square_ax", lambda *args, **kwargs: [0.2, 0, 0.1, 0.1])
+    monkeypatch.setattr(pdt, "generate_mean_counts_panel", lambda ax, cax, *args, **kwargs: (ax, cax))
+    monkeypatch.setattr(pdt, "generate_obs_exp_panel", lambda ax, cax, *args, **kwargs: (ax, cax))
+    monkeypatch.setattr(pdt, "generate_ALG_mean_counts_panel", lambda ax, cax, *args, **kwargs: (ax, cax))
+    monkeypatch.setattr(pdt, "generate_ALG_obs_exp_counts_panel", lambda ax, cax, *args, **kwargs: (ax, cax))
+    monkeypatch.setattr(pdt, "generate_trace_panel", lambda ax, *args, **kwargs: ax)
+
+    tree = FakeTree()
+    pdt._make_one_simulation_plot(
+        algdf,
+        plotdf_sumdf,
+        2,
+        2,
+        tree,
+        2,
+        [],
+        str(tmp_path / "heatmap"),
+        trace_cache={2: {("num", "frac", "abs"): {"lines": {}, "num_sims": 1}, ("ALG", "size", "abs"): {"lines": {}, "num_sims": 1}}},
+    )
+    assert any(path.name.startswith("heatmap_2_Clade") for path in tmp_path.iterdir())
+
+    missing_tree = FakeTree()
+    missing_tree.G = nx.DiGraph()
+    pdt._make_one_simulation_plot(algdf, plotdf_sumdf, 1, 1, missing_tree, 99, [], str(tmp_path / "missing"))
+    assert any(path.name.startswith("missing_99_") for path in tmp_path.iterdir())
+
+    sim_file = tmp_path / "sim.tsv"
+    sim_file.write_text("x\n")
+    monkeypatch.setattr(pdt, "_global_sampledf_path", "sample.tsv")
+    monkeypatch.setattr(pdt, "_global_algdf_path", "alg.tsv")
+    monkeypatch.setattr(pdt, "run_n_simulations_save_results", lambda *args, **kwargs: open(args[2], "w").write("ok\n"))
+    ok = pdt._run_simulation_worker((1, 5, 10, 0.1))
+    assert ok["status"] == "success"
+    monkeypatch.setattr(pdt, "run_n_simulations_save_results", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    failed = pdt._run_simulation_worker((2, 5, 10, 0.1))
+    assert failed["status"] == "failed"
+
+    monkeypatch.setattr(pdt, "_make_one_simulation_plot", lambda *args, **kwargs: None)
+    worker_ok = pdt._make_heatmap_worker((algdf, plotdf_sumdf, 1, 1, tree, 2, [], "out", 6, None))
+    assert worker_ok["status"] == "success"
+    monkeypatch.setattr(pdt, "_make_one_simulation_plot", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("bad heatmap")))
+    worker_bad = pdt._make_heatmap_worker((algdf, plotdf_sumdf, 1, 1, tree, 2, [], "out", 6, None))
+    assert worker_bad["status"] == "failed"
+
+    class FakeColoc:
+        def __init__(self):
+            self.plotmatrix_sumdf = pd.DataFrame({"branch": ["(1, 2)"], "x": [1]})
+            self.num_observed_observations = 3
+            self.num_expected_observations = 4
+
+        def plotmatrix_listoffiles_to_plotmatrix(self, _files):
+            return None
+
+    monkeypatch.setattr(pdt, "PhyloTree", FakeTree)
+    monkeypatch.setattr(pdt.rbh_tools, "parse_ALG_rbh_to_colordf", lambda _path: algdf)
+    monkeypatch.setattr(pdt, "coloc_array", FakeColoc)
+    monkeypatch.setattr(pdt, "precompute_trace_cache", lambda *args, **kwargs: {2: {}})
+    monkeypatch.setattr(
+        pdt,
+        "_make_heatmap_worker",
+        lambda args: {"taxid": args[5], "taxon_name": "Clade", "status": "success", "message": "", "filename": "x.pdf"},
+    )
+    monkeypatch.setattr(pdt.odp_plot, "format_matplotlib", lambda: None)
+    pdt.read_simulations_and_make_heatmaps([str(sim_file)], pd.DataFrame({"taxidstring": ["1;2"]}), "alg.rbh", "out", [2], num_processes=1, skip_traces=True)
+
+
+def test_axis_geometry_helpers_and_panel_generators():
+    assert pdt.i2f(2, 8) == 0.25
+    assert pdt.gen_square_ax(2, 4, 10, 20, 5) == [0.2, 0.2, 0.5, 0.25]
+    plot_params, cbar_params = pdt.gen_square_ax_and_colorbar(2, 4, 10, 20, 5)
+    assert plot_params == [0.2, 0.2, 0.5, 0.25]
+    assert cbar_params[0] > plot_params[0]
+
+    algdf = pd.DataFrame(
+        {
+            "ALGname": ["A", "B", "C"],
+            "Color": ["#aa0000", "#00aa00", "#0000aa"],
+            "Size": [1, 2, 3],
+        }
+    )
+    sumdf = pd.DataFrame(
+        {
+            "ALG_num": ["ALG", "ALG", "ALG", "ALG", "num", "num", "num", "num", "num", "num", "num", "num"],
+            "bin": [
+                "('A', 'B')",
+                "('A', 'B')",
+                "('B', 'C')",
+                "('B', 'C')",
+                "(0.0, 0.5)",
+                "(0.0, 0.5)",
+                "(0.5, 1.0)",
+                "(0.5, 1.0)",
+                "(1, 2)",
+                "(1, 2)",
+                "(2, 3)",
+                "(2, 3)",
+            ],
+            "ob_ex": ["observed", "expected", "observed", "expected", "observed", "expected", "observed", "expected", "observed", "expected", "observed", "expected"],
+            "size_frac": ["frac", "frac", "frac", "frac", "frac", "frac", "frac", "frac", "size", "size", "size", "size"],
+            "abs_CC": ["abs", "abs", "abs", "abs", "abs", "abs", "abs", "abs", "CC", "CC", "CC", "CC"],
+            "counts": [4, 2, 6, 3, 5, 2, 7, 3, 8, 4, 9, 5],
+            "count_per_sim": [4, 2, 6, 3, 5, 2, 7, 3, 8, 4, 9, 5],
+        }
+    )
+
+    fig, axes = plt.subplots(2, 4, figsize=(12, 6))
+    pdt.generate_ALG_obs_exp_counts_panel(axes[0, 0], axes[0, 1], sumdf, algdf)
+    pdt.generate_ALG_mean_counts_panel(axes[0, 2], axes[0, 3], sumdf, algdf)
+    pdt.generate_mean_counts_panel(axes[1, 0], axes[1, 1], sumdf, "frac", "abs")
+    pdt.generate_obs_exp_panel(axes[1, 2], axes[1, 3], sumdf, "size", "CC")
+
+    assert axes[0, 0].get_xlim()[1] == len(algdf)
+    assert axes[0, 2].get_title().startswith("Mean count of fusion events")
+    assert "Smaller ALG size" in axes[1, 0].get_xlabel()
+    assert "CCs" in axes[1, 2].get_title()
+    plt.close(fig)
+
+
+def test_main_stats_only_mode(tmp_path, monkeypatch):
+    perspchrom = tmp_path / "persp.tsv"
+    perspchrom.write_text("species\ttaxidstring\nsp\t1;2\n")
+
+    calls = {}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        pdt,
+        "generate_stats_df",
+        lambda infile, outfile: calls.setdefault("stats", (infile, outfile)) or 0,
+    )
+
+    assert pdt.main([str(perspchrom), "--skip-simulations", "--skip-heatmaps"]) == 0
+    assert calls["stats"] == (str(perspchrom), "statsdf.tsv")
+
+
+def test_main_simulation_and_heatmap_pipeline(tmp_path, monkeypatch):
+    perspchrom = tmp_path / "persp.tsv"
+    alg_rbh = tmp_path / "alg.rbh"
+    for path in [perspchrom, alg_rbh]:
+        path.write_text("x\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(pdt, "generate_stats_df", lambda infile, outfile: 0)
+    monkeypatch.setattr(
+        pdt.rbh_tools,
+        "parse_ALG_rbh_to_colordf",
+        lambda _path: pd.DataFrame({"ALGname": ["A"], "Color": ["#aa0000"], "Size": [1]}),
+    )
+
+    class FakePool:
+        def __init__(self, processes):
+            self.processes = processes
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def imap_unordered(self, func, job_args):
+            return iter(
+                [
+                    {"index": idx, "status": "success", "message": "", "filename": f"sim_results_{idx}_1.tsv"}
+                    for idx, *_rest in job_args
+                ]
+            )
+
+        def close(self):
+            return None
+
+        def join(self):
+            return None
+
+        def terminate(self):
+            return None
+
+    monkeypatch.setattr(pdt, "Pool", FakePool)
+    monkeypatch.setattr(
+        pdt,
+        "glob",
+        type(
+            "FakeGlob",
+            (),
+            {
+                "glob": staticmethod(
+                    lambda pattern: [str(tmp_path / "simulations" / "sim_results_0_1.tsv")]
+                    if "sim_results" in pattern
+                    else []
+                )
+            },
+        )(),
+    )
+
+    heatmap_calls = {}
+    monkeypatch.setattr(
+        pdt,
+        "read_simulations_and_make_heatmaps",
+        lambda sim_files, per_sp_df, alg_path, outprefix, clades, num_processes=1, skip_traces=False: heatmap_calls.setdefault(
+            "args",
+            (sim_files, per_sp_df, alg_path, outprefix, len(clades), num_processes, skip_traces),
+        ),
+    )
+
+    assert (
+        pdt.main(
+            [
+                str(perspchrom),
+                str(alg_rbh),
+                "--num-simulations",
+                "1",
+                "--sims-per-run",
+                "1",
+                "--num-processes",
+                "2",
+                "--skip-traces",
+            ]
+        )
+        == 0
+    )
+
+    assert heatmap_calls["args"][1] == str(perspchrom)
+    assert heatmap_calls["args"][2] == str(alg_rbh)
+    assert heatmap_calls["args"][3] == "simulations"
+    assert heatmap_calls["args"][5] == 2
+    assert heatmap_calls["args"][6] is True

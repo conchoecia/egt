@@ -144,6 +144,8 @@ def gen_data_availability_statement(sample_df_filepath, outfilepath):
             #html_content += f"<i>{taxname}</i> ("
             html_content += f"<i><a href='https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id={taxid}'>{taxname}</a></i> ("
             for i in range(len(accessions)-1):
+                thisac = accessions[i]
+                an = thisac[0:3] + "_" + thisac[3:]
                 html_content += f"{an}, "
             # now do the last one and add the closing parenthesis
             thisac = accessions[-1]

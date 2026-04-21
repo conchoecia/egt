@@ -79,6 +79,32 @@ def test_rbh_to_scafnum_and_parse_alg_rbh_to_colordf(tmp_path: Path):
     assert list(colors["ALGname"]) == ["B", "A"]
 
 
+def test_parse_rbh_and_combine_validation_errors(tmp_path: Path, monkeypatch):
+    with pytest.raises(IOError, match="does not exist"):
+        rbh_tools.parse_rbh(tmp_path / "missing.tsv")
+
+    no_rbh = _write_rbh(tmp_path / "no_rbh.tsv", "gene_group\tA_scaf\tA_gene\tA_pos\nALG1\ta\tg\t1\n")
+    with pytest.raises(IOError, match="column named 'rbh'"):
+        rbh_tools.parse_rbh(no_rbh)
+
+    missing_cols = _write_rbh(tmp_path / "missing_cols.tsv", "rbh\tgene_group\tA_scaf\tA_gene\nr1\tALG1\ta\tg\n")
+    with pytest.raises(IOError, match="mandatory columns are missing"):
+        rbh_tools.parse_rbh(missing_cols)
+
+    bad_color = _write_rbh(
+        tmp_path / "bad_color.tsv",
+        "rbh\tgene_group\tcolor\tA_scaf\tA_gene\tA_pos\nr1\tALG1\tred\ta\tg\t1\n",
+    )
+    with pytest.raises(IOError, match="not a legal hex color"):
+        rbh_tools.parse_rbh(bad_color)
+
+    bad_read = tmp_path / "bad_read.tsv"
+    bad_read.write_text("x\n")
+    monkeypatch.setattr(rbh_tools.pd, "read_csv", lambda *args, **kwargs: (_ for _ in ()).throw(Warning("bad file")))
+    with pytest.raises(UnboundLocalError):
+        rbh_tools.parse_rbh(bad_read)
+
+
 def test_rbhdf_to_alglocdf_builds_split_dataframe():
     df = pd.DataFrame(
         {
@@ -98,3 +124,15 @@ def test_rbhdf_to_alglocdf_builds_split_dataframe():
     }
     assert set(splits["gene_group"]) == {"ALG1", "ALG2"}
 
+
+def test_combine_rbh_validation_errors(tmp_path: Path):
+    left = _write_rbh(
+        tmp_path / "left_bad.tsv",
+        "\t".join(["rbh", "gene_group", "A_scaf", "A_gene", "A_pos"]) + "\n" + "\t".join(["l1", "ALG1", "a1", "ag1", "10"]) + "\n",
+    )
+    right = _write_rbh(
+        tmp_path / "right_bad.tsv",
+        "\t".join(["rbh", "gene_group", "B_scaf", "B_gene", "B_pos"]) + "\n" + "\t".join(["r1", "ALG2", "b1", "bg1", "20"]) + "\n",
+    )
+    with pytest.raises(IOError, match="do not have exactly one shared sample"):
+        rbh_tools.combine_rbh(left, right)

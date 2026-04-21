@@ -2121,7 +2121,7 @@ def mgt_mlt_plot_HTML(
             rank_text=rank_text,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
-        ), code="""
+        ), code=r"""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var colors = data['color'];
@@ -2948,7 +2948,7 @@ def rbh_to_samplename(rbhfile, ALGname) -> str:
 
     # split on - and check that the second element is an integer
     if not re.match(r"^[0-9]*$", splits[1]):
-        raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
+        raise ValueError(f"There is a non-numeric character in the taxid string, {splits[1]}, for file {filename}. Exiting.")
     # I haven't makde a unit test. Not working on ssh. Oh well.
     return filename
 

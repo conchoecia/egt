@@ -31,6 +31,26 @@ def test_parse_args_validates_conflicts_and_metadata(tmp_path: Path):
         plotdfs.parse_args(["-d", str(tmp_path), "-f", str(df), "-p", "out"])
 
 
+def test_parse_args_normalizes_phylolist_and_validates_ranges(tmp_path: Path):
+    df1 = tmp_path / "subsample_phylum.neighbors_15.mind_0.1.df"
+    df2 = tmp_path / "subsample_class.neighbors_20.mind_0.2.df"
+    pd.DataFrame({"UMAP1": [0.0], "UMAP2": [1.0]}).to_csv(df1, sep="\t")
+    pd.DataFrame({"UMAP1": [1.0], "UMAP2": [0.0]}).to_csv(df2, sep="\t")
+
+    args = plotdfs.parse_args(
+        ["-p", "out", "--phylolist", f"{df1} {df2}"]
+    )
+    assert args.phylolist == [str(df1), str(df2)]
+
+    with pytest.raises(ValueError, match="genome-min-bp must be < genome-max-bp"):
+        plotdfs.parse_args(
+            ["-f", str(df1), "-p", "out", "--genome-min-bp", "5", "--genome-max-bp", "5"]
+        )
+
+    with pytest.raises(ValueError, match="File does not exist"):
+        plotdfs.parse_args(["-p", "out", "--phylolist", str(tmp_path / "missing.df")])
+
+
 def test_generate_df_dict_and_filename_parsing(tmp_path: Path):
     df_path = tmp_path / "subsample_phylum.neighbors_15.mind_0.1.missing_large.method_mean.euclidean.df"
     pd.DataFrame({"x": [1], "y": [2]}).to_csv(df_path, sep="\t")
@@ -83,6 +103,48 @@ def test_parse_metadata_dfs_rejects_invalid_files(tmp_path: Path):
         plotdfs.parse_metadata_dfs([str(meta)])
 
 
+def test_parse_metadata_dfs_additional_validation_and_warnings(tmp_path: Path, capsys):
+    with pytest.raises(ValueError, match="must be a list"):
+        plotdfs.parse_metadata_dfs("not-a-list")
+
+    missing = tmp_path / "missing.tsv"
+    with pytest.raises(ValueError, match="Metadata file does not exist"):
+        plotdfs.parse_metadata_dfs([str(missing)])
+
+    no_rbh = tmp_path / "no_rbh.tsv"
+    no_rbh.write_text("value\n1\n")
+    with pytest.raises(ValueError, match="does not contain a 'rbh' column"):
+        plotdfs.parse_metadata_dfs([str(no_rbh)])
+
+    only_rbh = tmp_path / "only_rbh.tsv"
+    only_rbh.write_text("rbh\nr1\n")
+    with pytest.raises(ValueError, match="does not contain any columns other than 'rbh'"):
+        plotdfs.parse_metadata_dfs([str(only_rbh)])
+
+    no_pair = tmp_path / "no_pair.tsv"
+    no_pair.write_text("rbh\tstatus_color\nr1\t#112233\n")
+    with pytest.raises(ValueError, match="does not contain a corresponding column"):
+        plotdfs.parse_metadata_dfs([str(no_pair)])
+
+    bad_color = tmp_path / "bad_color.tsv"
+    bad_color.write_text("rbh\tstatus\tstatus_color\nr1\tA\tred\n")
+    with pytest.raises(ValueError, match="does not contain valid hex colors"):
+        plotdfs.parse_metadata_dfs([str(bad_color)])
+
+    one_value = tmp_path / "one_value.tsv"
+    one_value.write_text("rbh\tlabel\nr1\tsame\nr2\tsame\n")
+    merged = plotdfs.parse_metadata_dfs([str(one_value)])
+    assert set(merged["label_color"]) == {"#000000"}
+    assert "contains only one unique value" in capsys.readouterr().out
+
+    dup1 = tmp_path / "dup1.tsv"
+    dup1.write_text("rbh\tshared\tshared_color\nr1\t1\t#112233\n")
+    dup2 = tmp_path / "dup2.tsv"
+    dup2.write_text("rbh\tshared\tshared_color\nr2\t2\t#445566\n")
+    with pytest.raises(ValueError, match="Conflicting column names across metadata files"):
+        plotdfs.parse_metadata_dfs([str(dup1), str(dup2)])
+
+
 def test_load_phylo_df_by_rank_from_phylolist(tmp_path: Path):
     path1 = tmp_path / "subsample_phylum.neighbors_15.mind_0.1.df"
     path2 = tmp_path / "subsample_class.neighbors_30.mind_0.2.df"
@@ -94,4 +156,3 @@ def test_load_phylo_df_by_rank_from_phylolist(tmp_path: Path):
     assert set(df_by_rank) == {"phylum", "class"}
     assert all_params == [(15, 0.1), (30, 0.2)]
     assert row_labels["phylum"] == "phylum"
-

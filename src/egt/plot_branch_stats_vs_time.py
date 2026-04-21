@@ -1912,13 +1912,19 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
         cbar.set_label('Age (Mya)', fontsize=10)
         # Invert the colorbar labels to show actual ages (not negative)
         cbar_ticks = cbar.get_ticks()
+        cbar.set_ticks(cbar_ticks)
         cbar.set_ticklabels([f'{int(-t)}' for t in cbar_ticks])
 
         # increase the horizontal and vertical space between the panels
         plt.subplots_adjust(hspace=0.5, wspace=0.5)
 
         # save to a pdf with tight layout to prevent overlap
-        outpdf =  outprefix.rstrip(".pdf").rstrip(".tsv") + ".pdf"
+        outpdf = str(outprefix)
+        if outpdf.endswith(".pdf"):
+            outpdf = outpdf[:-4]
+        elif outpdf.endswith(".tsv"):
+            outpdf = outpdf[:-4]
+        outpdf = outpdf + ".pdf"
         plt.savefig(outpdf, facecolor='white', edgecolor='none', bbox_inches='tight')
         # close the figure to free up memory
         plt.close(fig)
