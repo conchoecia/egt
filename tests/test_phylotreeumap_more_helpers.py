@@ -314,6 +314,8 @@ def test_command_wrappers_and_main_dispatch(monkeypatch, tmp_path: Path):
                 str(tmp_path / "render.html"),
                 "--analysis-type",
                 "MLT",
+                "--tree-height",
+                "333",
             ]
         )
         == 0
@@ -322,6 +324,9 @@ def test_command_wrappers_and_main_dispatch(monkeypatch, tmp_path: Path):
     assert [name for name, _ in calls] == ["build", "odog", "mgt", "mlt", "html"]
     assert (tmp_path / "combo_out.tsv").exists()
     assert (tmp_path / "combined.npz").exists()
+    assert calls[-1][1]["tree_newick"] is None
+    assert calls[-1][1]["tree_palette"] is None
+    assert calls[-1][1]["tree_height"] == 333
 
 
 def test_construct_lil_matrix_and_rbh_to_samplename_error_paths(tmp_path: Path):

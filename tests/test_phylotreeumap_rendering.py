@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 from scipy.sparse import csr_matrix, save_npz
 
+from egt import palette as palette_module
+from egt import newick_to_common_ancestors as nta
 from egt import phylotreeumap as ptu
 
 
@@ -30,6 +32,73 @@ def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
     html_out = tmp_path / "plot.html"
     ptu.mgt_mlt_plot_HTML(str(umap_df), str(html_out), analysis_type="MGT", plot_sizing_mode="stretch_width")
     assert html_out.exists()
+
+    tree_path = tmp_path / "tiny_tree.nwk"
+    tree_path.write_text("((Alpha:1,Beta:1):1,Gamma:2);\n")
+    palette_yaml = tmp_path / "palette.yaml"
+    palette_yaml.write_text(
+        """
+schema_version: 1
+clades:
+  root:
+    taxid: 100
+    label: "Root"
+    color: "#111111"
+  clade10:
+    taxid: 10
+    label: "Clade10"
+    color: "#ff0000"
+  gamma:
+    taxid: 3
+    label: "Gamma"
+    color: "#00ff00"
+fallback:
+  label: "fallback"
+  color: "#999999"
+""".lstrip()
+    )
+
+    class FakeNCBI:
+        def get_lineage(self, taxid):
+            lineages = {
+                1: [100, 10, 1],
+                2: [100, 10, 2],
+                3: [100, 3],
+                10: [100, 10],
+                100: [100],
+            }
+            return lineages[int(taxid)]
+
+        def get_name_translator(self, names):
+            mapping = {"Alpha": [1], "Beta": [2], "Gamma": [3]}
+            return {name: mapping[name] for name in names if name in mapping}
+
+        def get_taxid_translator(self, taxids):
+            mapping = {1: "Alpha", 2: "Beta", 3: "Gamma", 10: "Clade10", 100: "Root"}
+            out = {}
+            for taxid in taxids:
+                tid = int(taxid)
+                if tid not in mapping:
+                    continue
+                out[taxid] = mapping[tid]
+                out[tid] = mapping[tid]
+            return out
+
+    monkeypatch.setattr(ptu, "NCBITaxa", lambda: FakeNCBI())
+    monkeypatch.setattr(nta, "NCBITaxa", lambda: FakeNCBI())
+    monkeypatch.setattr(palette_module, "_get_shared_taxid_canonicalizer", lambda: None)
+    linked_html = tmp_path / "plot_with_tree.html"
+    ptu.mgt_mlt_plot_HTML(
+        str(umap_df),
+        str(linked_html),
+        analysis_type="MGT",
+        tree_newick=str(tree_path),
+        tree_palette=str(palette_yaml),
+        tree_height=180,
+    )
+    html_text = linked_html.read_text(encoding="utf-8")
+    assert "Phylogenetic Tree" in html_text
+    assert "tree_node_source" in html_text or "horizontal_segment_index" in html_text
 
     mlt_html_df = tmp_path / "mlt_html.tsv"
     pd.DataFrame(
@@ -58,6 +127,72 @@ def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
 
     ptu.plot_umap_pdf(str(tmp_path / "missing.df"), str(tmp_path / "empty.pdf"), "Missing", color_by_clade=False)
     assert (tmp_path / "empty.pdf").exists()
+
+
+def test_build_linked_tree_bokeh_bundle_small_tree(tmp_path: Path, monkeypatch):
+    tree_path = tmp_path / "tiny_tree.nwk"
+    tree_path.write_text("((Alpha:1,Beta:1):1,Gamma:2);\n")
+    palette_yaml = tmp_path / "palette.yaml"
+    palette_yaml.write_text(
+        """
+schema_version: 1
+clades:
+  root:
+    taxid: 100
+    label: "Root"
+    color: "#111111"
+  clade10:
+    taxid: 10
+    label: "Clade10"
+    color: "#ff0000"
+  gamma:
+    taxid: 3
+    label: "Gamma"
+    color: "#00ff00"
+fallback:
+  label: "fallback"
+  color: "#999999"
+""".lstrip()
+    )
+
+    class FakeNCBI:
+        def get_lineage(self, taxid):
+            lineages = {
+                1: [100, 10, 1],
+                2: [100, 10, 2],
+                3: [100, 3],
+                10: [100, 10],
+                100: [100],
+            }
+            return lineages[int(taxid)]
+
+        def get_name_translator(self, names):
+            mapping = {"Alpha": [1], "Beta": [2], "Gamma": [3]}
+            return {name: mapping[name] for name in names if name in mapping}
+
+        def get_taxid_translator(self, taxids):
+            mapping = {1: "Alpha", 2: "Beta", 3: "Gamma", 10: "Clade10", 100: "Root"}
+            out = {}
+            for taxid in taxids:
+                tid = int(taxid)
+                if tid not in mapping:
+                    continue
+                out[taxid] = mapping[tid]
+                out[tid] = mapping[tid]
+            return out
+
+    monkeypatch.setattr(ptu, "NCBITaxa", lambda: FakeNCBI())
+    monkeypatch.setattr(nta, "NCBITaxa", lambda: FakeNCBI())
+    monkeypatch.setattr(palette_module, "_get_shared_taxid_canonicalizer", lambda: None)
+
+    bundle = ptu._build_linked_tree_bokeh_bundle(str(tree_path), str(palette_yaml))
+
+    assert bundle["leaf_count"] == 3
+    assert bundle["segment_count"] == 6
+    assert bundle["x_range"][0] < -0.5
+    assert sorted(bundle["tree_leaf_source"].data["taxid"]) == ["1", "2", "3"]
+    assert "#ff0000" in bundle["tree_source"].data["original_color"]
+    assert "#111111" in bundle["tree_source"].data["original_color"]
 
 
 def test_plot_umap_phylogeny_pdf_and_df_only_pipeline(tmp_path: Path, monkeypatch):

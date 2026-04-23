@@ -33,6 +33,7 @@ import numpy as np
 np.set_printoptions(linewidth=np.inf)
 import os
 import pandas as pd
+from pathlib import Path
 import re
 import scipy.sparse
 from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz, csr_matrix
@@ -63,6 +64,7 @@ sys.path.insert(1, source_path)
 from egt import rbh_tools
 
 from egt.legacy.plot_alg_fusions_v2 import taxids_to_taxidstringdict
+from egt.palette import Palette
 
 from itertools import combinations
 
@@ -1190,6 +1192,344 @@ def get_text_color(hex_color):
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     return "#000000" if brightness > 128 else "#FFFFFF"  # Dark colors get white text, bright colors get black text
 
+
+def _tax_tree_postorder_ids(tax_tree):
+    """Return tax-tree node ids in postorder."""
+    if tax_tree.root is None:
+        tax_tree.root = tax_tree.find_root()
+    if tax_tree.root is None:
+        return []
+
+    order = []
+    stack = [(tax_tree.root, False)]
+    while stack:
+        node_id, seen = stack.pop()
+        if seen:
+            order.append(node_id)
+            continue
+        stack.append((node_id, True))
+        for child_id in tax_tree.nodes[node_id].children:
+            stack.append((child_id, False))
+    return order
+
+
+def _collect_tax_tree_subtree_ids(tax_tree, root_id):
+    """Return all descendants of ``root_id`` including itself."""
+    descendants = set()
+    stack = [root_id]
+    while stack:
+        current = stack.pop()
+        if current in descendants or current not in tax_tree.nodes:
+            continue
+        descendants.add(current)
+        stack.extend(tax_tree.nodes[current].children)
+    return descendants
+
+
+def _compute_tax_tree_plot_positions(tax_tree):
+    """Populate ``node.x`` for the linked-tree Bokeh plot."""
+    tax_tree.sort_nodes("ascending")
+    ordered_leaf_ids = list(getattr(tax_tree, "leaf_order", []))
+    for i, node_id in enumerate(ordered_leaf_ids):
+        tax_tree.nodes[node_id].x = float(i)
+
+    for node_id in _tax_tree_postorder_ids(tax_tree):
+        node = tax_tree.nodes[node_id]
+        if len(node.children) == 0:
+            continue
+        child_xs = [
+            tax_tree.nodes[child_id].x
+            for child_id in node.children
+            if getattr(tax_tree.nodes[child_id], "x", None) is not None
+        ]
+        if not child_xs:
+            continue
+        if len(child_xs) == 1:
+            node.x = float(child_xs[0])
+        else:
+            node.x = (min(child_xs) + max(child_xs)) / 2.0
+    return ordered_leaf_ids
+
+
+def _build_linked_tree_color_maps(tax_tree, palette, placements, palette_order):
+    """Return vertical and horizontal segment colors for nested-tree coloring."""
+    vertical_colors = {
+        (parent_id, child_id): "#b5b5b5"
+        for (parent_id, child_id) in tax_tree.edges
+    }
+    horizontal_colors = {
+        node_id: "#b5b5b5"
+        for node_id, node in tax_tree.nodes.items()
+        if len(node.children) > 1
+    }
+
+    for tid in palette_order:
+        color = palette.by_taxid[tid].color
+        for component_root in placements[tid].component_roots:
+            descendants = _collect_tax_tree_subtree_ids(tax_tree, component_root)
+            for node_id in descendants:
+                node = tax_tree.nodes[node_id]
+                if len(node.children) > 1:
+                    horizontal_colors[node_id] = color
+                if node_id == component_root:
+                    continue
+                parent_id = node.parent
+                if parent_id is None or parent_id == -1 or parent_id not in descendants:
+                    continue
+                vertical_colors[(parent_id, node_id)] = color
+    return vertical_colors, horizontal_colors
+
+
+def _build_linked_tree_bokeh_bundle(tree_newick_path, palette_path):
+    """Build compact Bokeh-ready linked-tree sources for MGT HTML."""
+    from egt import palette_preview as pp
+
+    source_tree = Tree(str(tree_newick_path), parser=1) if hasattr(Tree, "__call__") else Tree(open(tree_newick_path).read())
+    ncbi = NCBITaxa()
+    palette = Palette.from_yaml(str(palette_path))
+
+    tax_tree = pp._build_taxidtree_from_source_tree(source_tree, ncbi)
+    ordered_leaf_ids = _compute_tax_tree_plot_positions(tax_tree)
+    placements = pp._resolve_palette_clade_placements(tax_tree, palette, ncbi)
+    palette_order = pp._build_palette_breadth_first_order(palette, placements, ncbi)
+    vertical_colors, horizontal_colors = _build_linked_tree_color_maps(
+        tax_tree,
+        palette,
+        placements,
+        palette_order,
+    )
+
+    node_ids = list(tax_tree.nodes.keys())
+    node_index_by_id = {node_id: i for i, node_id in enumerate(node_ids)}
+
+    node_parent_index = []
+    node_horizontal_segment_index = [-1] * len(node_ids)
+    node_vertical_segment_index = [-1] * len(node_ids)
+    node_is_leaf = []
+
+    for node_id in node_ids:
+        node = tax_tree.nodes[node_id]
+        parent_id = node.parent
+        node_parent_index.append(node_index_by_id[parent_id] if parent_id in node_index_by_id else -1)
+        node_is_leaf.append(len(node.children) == 0)
+
+    segment_data = {
+        "x0": [],
+        "y0": [],
+        "x1": [],
+        "y1": [],
+        "color": [],
+        "original_color": [],
+        "alpha": [],
+        "original_alpha": [],
+        "line_width": [],
+        "segment_kind": [],
+    }
+
+    for node_id in _tax_tree_postorder_ids(tax_tree):
+        node = tax_tree.nodes[node_id]
+        if len(node.children) <= 1:
+            continue
+        child_xs = [
+            tax_tree.nodes[child_id].x
+            for child_id in node.children
+            if getattr(tax_tree.nodes[child_id], "x", None) is not None
+        ]
+        if len(child_xs) <= 1:
+            continue
+        color = horizontal_colors.get(node_id, "#b5b5b5")
+        seg_idx = len(segment_data["x0"])
+        segment_data["x0"].append(float(min(child_xs)))
+        segment_data["y0"].append(float(node.nodeage))
+        segment_data["x1"].append(float(max(child_xs)))
+        segment_data["y1"].append(float(node.nodeage))
+        segment_data["color"].append(color)
+        segment_data["original_color"].append(color)
+        segment_data["alpha"].append(0.75)
+        segment_data["original_alpha"].append(0.75)
+        segment_data["line_width"].append(0.8)
+        segment_data["segment_kind"].append("horizontal")
+        node_horizontal_segment_index[node_index_by_id[node_id]] = seg_idx
+
+    for parent_id, child_id in tax_tree.edges:
+        child = tax_tree.nodes[child_id]
+        parent = tax_tree.nodes[parent_id]
+        if getattr(child, "x", None) is None or child.nodeage is None or parent.nodeage is None:
+            continue
+        color = vertical_colors.get((parent_id, child_id), "#b5b5b5")
+        seg_idx = len(segment_data["x0"])
+        segment_data["x0"].append(float(child.x))
+        segment_data["y0"].append(float(child.nodeage))
+        segment_data["x1"].append(float(child.x))
+        segment_data["y1"].append(float(parent.nodeage))
+        segment_data["color"].append(color)
+        segment_data["original_color"].append(color)
+        segment_data["alpha"].append(0.75)
+        segment_data["original_alpha"].append(0.75)
+        segment_data["line_width"].append(0.8)
+        segment_data["segment_kind"].append("vertical")
+        node_vertical_segment_index[node_index_by_id[child_id]] = seg_idx
+
+    leaf_data = {
+        "taxid": [],
+        "node_index": [],
+        "x": [],
+        "taxname": [],
+    }
+    for leaf_id in ordered_leaf_ids:
+        leaf_node = tax_tree.nodes[leaf_id]
+        leaf_data["taxid"].append(str(leaf_id))
+        leaf_data["node_index"].append(node_index_by_id[leaf_id])
+        leaf_data["x"].append(float(leaf_node.x))
+        leaf_data["taxname"].append(getattr(leaf_node, "name", "") or "")
+
+    max_age = max(
+        float(node.nodeage)
+        for node in tax_tree.nodes.values()
+        if node.nodeage is not None
+    ) if tax_tree.nodes else 0.0
+
+    node_data = {
+        "node_id": [str(node_id) for node_id in node_ids],
+        "parent_index": node_parent_index,
+        "horizontal_segment_index": node_horizontal_segment_index,
+        "vertical_segment_index": node_vertical_segment_index,
+        "is_leaf": node_is_leaf,
+    }
+
+    tree_leaf_count = len(ordered_leaf_ids)
+    tree_xpad = min(max(1.5, tree_leaf_count * 0.003), 12.0)
+
+    return {
+        "tree_source": bokeh.models.ColumnDataSource(segment_data),
+        "tree_node_source": bokeh.models.ColumnDataSource(node_data),
+        "tree_leaf_source": bokeh.models.ColumnDataSource(leaf_data),
+        "x_range": (-0.5 - tree_xpad, max(tree_leaf_count - 0.5 + tree_xpad, 0.5)),
+        "y_range": (0.0, max_age * 1.02 if max_age > 0 else 1.0),
+        "leaf_count": tree_leaf_count,
+        "segment_count": len(segment_data["x0"]),
+    }
+
+
+def _linked_tree_sync_js():
+    """Return the shared CustomJS helper used to sync the linked tree panel."""
+    return r"""
+            function syncLinkedTree(selected_indices, show_all_data) {
+                if (!tree_source || !tree_node_source || !tree_leaf_source) {
+                    return;
+                }
+
+                var tree_data = tree_source.data;
+                var node_data = tree_node_source.data;
+                var leaf_data = tree_leaf_source.data;
+
+                var colors = tree_data['color'];
+                var alphas = tree_data['alpha'];
+                var original_colors = tree_data['original_color'];
+                var original_alphas = tree_data['original_alpha'];
+
+                function restoreTree() {
+                    for (var i = 0; i < colors.length; i++) {
+                        colors[i] = original_colors[i];
+                        alphas[i] = original_alphas[i];
+                    }
+                    tree_source.change.emit();
+                }
+
+                if (show_all_data || !selected_indices || selected_indices.length === 0) {
+                    restoreTree();
+                    return;
+                }
+
+                var leaf_map = {};
+                for (var i = 0; i < leaf_data['taxid'].length; i++) {
+                    leaf_map[String(leaf_data['taxid'][i])] = leaf_data['node_index'][i];
+                }
+
+                var selected_leaf_nodes = [];
+                var seen_nodes = new Set();
+                for (var i = 0; i < selected_indices.length; i++) {
+                    var point_idx = selected_indices[i];
+                    var point_taxid = String(data['taxid'][point_idx] || '');
+                    if (!Object.prototype.hasOwnProperty.call(leaf_map, point_taxid)) {
+                        continue;
+                    }
+                    var leaf_node_idx = leaf_map[point_taxid];
+                    if (!seen_nodes.has(leaf_node_idx)) {
+                        seen_nodes.add(leaf_node_idx);
+                        selected_leaf_nodes.push(leaf_node_idx);
+                    }
+                }
+
+                if (selected_leaf_nodes.length === 0) {
+                    restoreTree();
+                    return;
+                }
+
+                var parent_index = node_data['parent_index'];
+                var horizontal_segment_index = node_data['horizontal_segment_index'];
+                var vertical_segment_index = node_data['vertical_segment_index'];
+                var is_leaf = node_data['is_leaf'];
+
+                var counts = new Map();
+                var first_chain = [];
+                for (var i = 0; i < selected_leaf_nodes.length; i++) {
+                    var current = selected_leaf_nodes[i];
+                    var chain = [];
+                    while (current !== null && current !== undefined && current >= 0) {
+                        chain.push(current);
+                        counts.set(current, (counts.get(current) || 0) + 1);
+                        current = parent_index[current];
+                    }
+                    if (i === 0) {
+                        first_chain = chain;
+                    }
+                }
+
+                var mrca = first_chain.length > 0 ? first_chain[first_chain.length - 1] : -1;
+                for (var i = 0; i < first_chain.length; i++) {
+                    var ancestor = first_chain[i];
+                    if ((counts.get(ancestor) || 0) === selected_leaf_nodes.length) {
+                        mrca = ancestor;
+                        break;
+                    }
+                }
+
+                var highlighted_segments = new Set();
+                function addSegment(seg_idx) {
+                    if (seg_idx !== null && seg_idx !== undefined && seg_idx >= 0) {
+                        highlighted_segments.add(seg_idx);
+                    }
+                }
+
+                for (var i = 0; i < selected_leaf_nodes.length; i++) {
+                    var current = selected_leaf_nodes[i];
+                    while (current !== null && current !== undefined && current >= 0) {
+                        var reached_mrca = current === mrca;
+                        addSegment(horizontal_segment_index[current]);
+                        if (!reached_mrca || is_leaf[current]) {
+                            addSegment(vertical_segment_index[current]);
+                        }
+                        if (reached_mrca) {
+                            break;
+                        }
+                        current = parent_index[current];
+                    }
+                }
+
+                for (var i = 0; i < colors.length; i++) {
+                    colors[i] = '#d3d3d3';
+                    alphas[i] = 0.15;
+                }
+
+                highlighted_segments.forEach(function(seg_idx) {
+                    colors[seg_idx] = original_colors[seg_idx];
+                    alphas[seg_idx] = original_alphas[seg_idx];
+                });
+                tree_source.change.emit();
+            }
+    """
+
 def mgt_mlt_plot_HTML(
     UMAPdf,
     outhtml,
@@ -1199,6 +1539,9 @@ def mgt_mlt_plot_HTML(
     plot_height=600,
     plot_sizing_mode=None,
     match_aspect=True,
+    tree_newick=None,
+    tree_palette=None,
+    tree_height=260,
 ):
     """
     This function takes the UMAPdf and generates an interactive Bokeh plot
@@ -1218,6 +1561,14 @@ def mgt_mlt_plot_HTML(
     match_aspect : bool, optional
         When ``True`` the x and y ranges maintain the same scale so that the data is never
         stretched during interactive resizing or zooming.
+    tree_newick : str, optional
+        Collapsed calibrated Newick tree to render above the UMAP. Only supported for
+        ``analysis_type="MGT"``.
+    tree_palette : str, optional
+        Palette YAML used for nested tree coloring. Defaults to the bundled
+        ``paper_palette.yaml`` when ``tree_newick`` is provided.
+    tree_height : int, optional
+        Height in pixels of the linked tree panel when enabled.
     """
     if analysis_type not in ["MGT", "MLT"]:
         raise ValueError(f"Invalid analysis_type: {analysis_type}. Must be 'MGT' or 'MLT'.")
@@ -1244,11 +1595,24 @@ def mgt_mlt_plot_HTML(
             f"{', '.join(sorted(filter(None, valid_sizing_modes)))} or None."
         )
 
-    for value, name in ((plot_width, "plot_width"), (plot_height, "plot_height")):
+    for value, name in ((plot_width, "plot_width"), (plot_height, "plot_height"), (tree_height, "tree_height")):
         if not isinstance(value, (int, np.integer)):
             raise TypeError(f"{name} must be provided as a positive integer.")
         if value <= 0:
             raise ValueError(f"{name} must be greater than zero.")
+
+    if tree_newick is not None and analysis_type != "MGT":
+        raise ValueError("Linked tree rendering is currently supported only for analysis_type='MGT'.")
+
+    if tree_newick is not None:
+        tree_newick = str(tree_newick)
+        if not os.path.exists(tree_newick):
+            raise IOError(f"The tree file {tree_newick} does not exist. Exiting.")
+        if tree_palette is None:
+            tree_palette = os.path.join(thisfile_path, "data", "paper_palette.yaml")
+        tree_palette = str(tree_palette)
+        if not os.path.exists(tree_palette):
+            raise IOError(f"The palette file {tree_palette} does not exist. Exiting.")
 
     if not outhtml.endswith(".html"):
         raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
@@ -1407,6 +1771,48 @@ def mgt_mlt_plot_HTML(
     plot.match_aspect = bool(match_aspect)
     if plot.match_aspect:
         plot.aspect_scale = 1
+
+    linked_tree_plot = None
+    linked_tree_source = None
+    linked_tree_node_source = None
+    linked_tree_leaf_source = None
+    if analysis_type == "MGT" and tree_newick is not None:
+        tree_bundle = _build_linked_tree_bokeh_bundle(tree_newick, tree_palette)
+        linked_tree_source = tree_bundle["tree_source"]
+        linked_tree_node_source = tree_bundle["tree_node_source"]
+        linked_tree_leaf_source = tree_bundle["tree_leaf_source"]
+
+        tree_figure_kwargs = dict(
+            title="Phylogenetic Tree",
+            tools="pan,xwheel_zoom,box_zoom,reset,save",
+            width=int(plot_width),
+            height=int(tree_height),
+            output_backend="svg",
+            x_range=tree_bundle["x_range"],
+            y_range=tree_bundle["y_range"],
+        )
+        if plot_sizing_mode and plot_sizing_mode != "fixed":
+            tree_figure_kwargs["sizing_mode"] = plot_sizing_mode
+
+        linked_tree_plot = bokeh.plotting.figure(**tree_figure_kwargs)
+        linked_tree_plot.output_backend = "svg"
+        linked_tree_plot.segment(
+            x0="x0",
+            y0="y0",
+            x1="x1",
+            y1="y1",
+            source=linked_tree_source,
+            line_color="color",
+            line_alpha="alpha",
+            line_width="line_width",
+            line_cap="butt",
+        )
+        linked_tree_plot.xaxis.visible = False
+        linked_tree_plot.yaxis.axis_label = "MYA"
+        linked_tree_plot.grid.visible = False
+        linked_tree_plot.outline_line_color = None
+        linked_tree_plot.min_border_left = 16
+        linked_tree_plot.min_border_right = 16
 
     # Add scatter plot
     scatter = plot.scatter(
@@ -1956,6 +2362,18 @@ def mgt_mlt_plot_HTML(
         )
         plot.add_tools(hover)
 
+        tree_sync_js = _linked_tree_sync_js() if linked_tree_source is not None else ""
+        tree_reset_js = "syncLinkedTree([], true);" if linked_tree_source is not None else ""
+        tree_apply_js = "syncLinkedTree(selected_indices, show_all_data);" if linked_tree_source is not None else ""
+        tree_lasso_js = "syncLinkedTree(lasso_indices, false);" if linked_tree_source is not None else ""
+        tree_callback_args = {}
+        if linked_tree_source is not None:
+            tree_callback_args.update(
+                tree_source=linked_tree_source,
+                tree_node_source=linked_tree_node_source,
+                tree_leaf_source=linked_tree_leaf_source,
+            )
+
         # Note: filtered_source was already created earlier as an empty ColumnDataSource
 
         search_taxid = bokeh.models.TextInput(
@@ -2113,7 +2531,7 @@ def mgt_mlt_plot_HTML(
         # Trigger when table selection changes
         filtered_source.selected.js_on_change('indices', table_selection_callback)
 
-        update_callback = bokeh.models.CustomJS(args=dict(
+        update_callback_args = dict(
             source=source,
             filtered_source=filtered_source,
             search_taxid=search_taxid,
@@ -2121,7 +2539,9 @@ def mgt_mlt_plot_HTML(
             rank_text=rank_text,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
-        ), code=r"""
+        )
+        update_callback_args.update(tree_callback_args)
+        update_callback_js = r"""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var colors = data['color'];
@@ -2131,6 +2551,7 @@ def mgt_mlt_plot_HTML(
             var base_alphas = data['base_alpha'];
             var original_colors = data['original_color'];
             var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
+/*TREE_SYNC_HELPER*/
 
             var taxid_raw = search_taxid.value.trim();
             var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
@@ -2180,6 +2601,7 @@ def mgt_mlt_plot_HTML(
                 
                 source.change.emit();
                 filtered_source.change.emit();
+/*TREE_SYNC_RESET*/
                 return;
             }
             
@@ -2278,10 +2700,15 @@ def mgt_mlt_plot_HTML(
                 filtered_source.selected.indices = [];
             }
 
+/*TREE_SYNC_APPLY*/
             source.selected.indices = selected_indices;
             source.change.emit();
             filtered_source.change.emit();
-        """)
+        """
+        update_callback_js = update_callback_js.replace("/*TREE_SYNC_HELPER*/", tree_sync_js)
+        update_callback_js = update_callback_js.replace("/*TREE_SYNC_RESET*/", tree_reset_js)
+        update_callback_js = update_callback_js.replace("/*TREE_SYNC_APPLY*/", tree_apply_js)
+        update_callback = bokeh.models.CustomJS(args=update_callback_args, code=update_callback_js)
 
         update_button.js_on_event("button_click", update_callback)
         size_slider.js_on_change("value", update_callback)
@@ -2289,15 +2716,18 @@ def mgt_mlt_plot_HTML(
         
         # Separate callback for lasso selection that doesn't modify source.selected.indices
         # This avoids infinite loop while still providing immediate visual feedback
-        lasso_callback = bokeh.models.CustomJS(args=dict(
+        lasso_callback_args = dict(
             source=source,
             filtered_source=filtered_source,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
-        ), code="""
+        )
+        lasso_callback_args.update(tree_callback_args)
+        lasso_callback_js = """
             var data = source.data;
             var filtered_data = filtered_source.data;
             var lasso_indices = source.selected.indices;
+""" + tree_sync_js + """
             
             // Only process if there's an actual lasso selection
             if (lasso_indices.length === 0) return;
@@ -2337,9 +2767,11 @@ def mgt_mlt_plot_HTML(
             }
             
             // Update sources (but DON'T modify source.selected.indices)
+""" + tree_lasso_js + """
             source.change.emit();
             filtered_source.change.emit();
-        """)
+        """
+        lasso_callback = bokeh.models.CustomJS(args=lasso_callback_args, code=lasso_callback_js)
         
         source.selected.js_on_change("indices", lasso_callback)
 
@@ -2398,7 +2830,10 @@ def mgt_mlt_plot_HTML(
 
         control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button, export_button, **row_kwargs)
-        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, data_table, **layout_kwargs)
+        layout_children = [plot, control_row, taxonomy_row, data_table]
+        if linked_tree_plot is not None:
+            layout_children.insert(0, linked_tree_plot)
+        layout = bokeh.layouts.column(*layout_children, **layout_kwargs)
 
     # Store the IDs for later reference in auto-init script
     source_id = source.id if filtered_source is not None else None
@@ -4518,9 +4953,8 @@ def _cmd_mlt_html(args):
 
 
 def _cmd_plot_html(args):
-    umapdf = pd.read_csv(args.umap_df, sep="\t", index_col=0)
     mgt_mlt_plot_HTML(
-        UMAPdf=umapdf,
+        UMAPdf=args.umap_df,
         outhtml=args.html_out,
         plot_title=args.title,
         analysis_type=args.analysis_type,
@@ -4528,6 +4962,9 @@ def _cmd_plot_html(args):
         plot_height=args.plot_height,
         plot_sizing_mode=args.sizing_mode,
         match_aspect=not args.no_match_aspect,
+        tree_newick=args.tree_newick,
+        tree_palette=args.tree_palette,
+        tree_height=args.tree_height,
     )
     return 0
 
@@ -4613,6 +5050,9 @@ def main(argv=None):
     p.add_argument("--plot-height", type=int, default=600, help="Plot height in pixels.")
     p.add_argument("--sizing-mode", default=None, choices=[None, "fixed", "stretch_width", "stretch_height", "stretch_both", "scale_width", "scale_height", "scale_both"], help="Bokeh sizing mode.")
     p.add_argument("--no-match-aspect", action="store_true", help="Disable locked aspect ratio.")
+    p.add_argument("--tree-newick", default=None, help="Optional collapsed calibrated Newick to render above the UMAP (MGT only).")
+    p.add_argument("--tree-palette", default=None, help="Optional palette YAML for linked tree coloring (defaults to bundled paper_palette.yaml).")
+    p.add_argument("--tree-height", type=int, default=260, help="Height in pixels of the linked tree panel when enabled.")
     p.set_defaults(func=_cmd_plot_html)
 
     args = parser.parse_args(argv)
