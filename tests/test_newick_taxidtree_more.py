@@ -259,6 +259,21 @@ def test_correct_missing_nodes_and_percolation(monkeypatch):
     assert tree.get_lineage_length([1, 2, 4]) == 10.0
 
 
+def test_build_from_newick_tree_uniquifies_duplicate_internal_taxids(monkeypatch):
+    tree = n2ca.TaxIDtree()
+    tree.NCBI = FakeNCBI()
+    newick = n2ca.PhyloTree("(Homo_sapiens[4])internal[4];", parser=1)
+
+    root_id = tree.build_from_newick_tree(newick, FakeNCBI())
+
+    assert root_id < 0
+    assert 4 in tree.nodes
+    assert root_id in tree.nodes
+    assert tree.nodes[4].parent is not None
+    assert tree.nodes[4].parent in tree.nodes
+    assert tree.nodes[4].parent != 4
+
+
 def test_percolation_interpolation_and_calc_edges(monkeypatch):
     tree = n2ca.TaxIDtree()
     tree.NCBI = FakeNCBI()

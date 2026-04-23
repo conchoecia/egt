@@ -58,11 +58,33 @@ class FakeNode:
             yield from child.traverse()
 
 
+def test_collapse_single_child_internal_nodes():
+    tree = FakeNode(
+        "root",
+        [
+            FakeNode("10"),
+            FakeNode("inner", [FakeNode("20")]),
+        ],
+    )
+
+    collapsed = ttn.collapse_single_child_internal_nodes(tree)
+
+    assert collapsed == 1
+    assert [child.name for child in tree.children] == ["10", "20"]
+
+
 def test_parse_args_requires_one_input_source():
     args = ttn.parse_args(["-t", "taxids.txt", "-o", "tree.nwk"])
     assert args.taxid_file == "taxids.txt"
     assert args.output_file == "tree.nwk"
     assert args.custom_phylogeny is False
+    assert args.preserve_single_child_internal_nodes is False
+
+
+def test_parse_args_preserve_single_child_internal_nodes_flag():
+    args = ttn.parse_args(["-t", "taxids.txt", "--preserve-single-child-internal-nodes"])
+    assert args.taxid_file == "taxids.txt"
+    assert args.preserve_single_child_internal_nodes is True
 
 
 def test_is_subspecies_or_below_and_get_species_level_taxid():
@@ -229,6 +251,48 @@ def test_main_builds_newick_from_taxid_file(tmp_path: Path, monkeypatch):
     assert export_calls[0][0] == (5, 20)
     assert (tmp_path / "subspecies_to_species_conversions.tsv").exists()
     assert (tmp_path / "tree.log").exists()
+
+
+def test_main_preserves_single_child_internal_nodes(tmp_path: Path, monkeypatch):
+    class MainNCBI(FakeNCBI):
+        def get_topology(self, taxids):
+            return FakeNode(
+                "root node",
+                [
+                    FakeNode(str(taxids[0])),
+                    FakeNode("", [FakeNode("20")]),
+                ],
+            )
+
+    ncbi = MainNCBI(
+        lineages={10: [1, 10], 20: [1, 20]},
+        names={10: "Alpha beta", 20: "Gamma delta"},
+    )
+    monkeypatch.setattr(ttn, "NCBITaxa", lambda: ncbi)
+    monkeypatch.setattr(ttn, "is_subspecies_or_below", lambda taxid, _ncbi: False)
+    monkeypatch.setattr(ttn, "export_timetree_list", lambda *_args, **_kwargs: None)
+
+    taxid_file = tmp_path / "taxids.txt"
+    taxid_file.write_text("10\n20\n")
+    output = tmp_path / "tree.nwk"
+
+    cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        assert ttn.main(
+            [
+                "-t",
+                str(taxid_file),
+                "-o",
+                str(output),
+                "--preserve-single-child-internal-nodes",
+            ]
+        ) == 0
+    finally:
+        os.chdir(cwd)
+
+    newick = output.read_text()
+    assert "('Gamma_delta[20]')" in newick
 
 
 def test_main_uses_custom_phylogeny_and_custom_timetree_output(tmp_path: Path, monkeypatch):

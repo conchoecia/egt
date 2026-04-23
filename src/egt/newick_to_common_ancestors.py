@@ -1304,6 +1304,7 @@ class TaxIDtree:
                     print(f"  Warning: Could not find taxid for: {leaf.name}")
                     continue
         
+        leaf_taxids = set(leaf_name_to_taxid.values())
         print(f"  Mapped {len(leaf_name_to_taxid)} species to taxids")
         
         # Build tree structure by traversing the newick tree
@@ -1312,6 +1313,14 @@ class TaxIDtree:
         node_to_id = {}
         next_internal_id = -1000  # Use negative IDs for internal nodes without bracket notation
         custom_taxids_found = []  # Track custom taxids we extract
+
+        def _fresh_internal_id() -> int:
+            nonlocal next_internal_id
+            while next_internal_id in self.nodes:
+                next_internal_id -= 1
+            node_id = next_internal_id
+            next_internal_id -= 1
+            return node_id
         
         def traverse_and_build(node, parent_id=None):
             nonlocal next_internal_id
@@ -1337,14 +1346,17 @@ class TaxIDtree:
                         # Track custom taxids (negative ones)
                         if node_id < 0:
                             custom_taxids_found.append((node.name, node_id))
+                        # Preserved unary internal nodes can reuse a descendant species
+                        # taxid. Keep the label, but assign a synthetic internal ID so the
+                        # TaxIDtree remains a proper tree keyed by unique node IDs.
+                        if node_id in leaf_taxids or node_id in self.nodes:
+                            node_id = _fresh_internal_id()
                     except (ValueError, IndexError):
                         # If parsing fails, use sequential negative IDs
-                        node_id = next_internal_id
-                        next_internal_id -= 1
+                        node_id = _fresh_internal_id()
                 else:
                     # No bracket notation, use sequential negative IDs
-                    node_id = next_internal_id
-                    next_internal_id -= 1
+                    node_id = _fresh_internal_id()
             
             node_to_id[node] = node_id
             

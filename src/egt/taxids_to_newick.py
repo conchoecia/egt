@@ -86,7 +86,35 @@ def parse_args(argv=None):
                         help='Output file for TimeTree.org compatible species list (one "Genus species" per line)')
     parser.add_argument('--custom_phylogeny', action='store_true',
                         help='Use custom phylogeny with Ctenophora as sister to all other animals (Myriazoa=-67)')
+    parser.add_argument(
+        '--preserve-single-child-internal-nodes',
+        action='store_true',
+        help=(
+            'Keep unary internal nodes in the emitted topology. By default these '
+            'nodes are collapsed to simplify downstream plots.'
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def collapse_single_child_internal_nodes(tree) -> int:
+    """Collapse unary internal nodes in-place and return the number removed."""
+    nodes_to_check = [tree]
+    collapsed_count = 0
+
+    while nodes_to_check:
+        node = nodes_to_check.pop(0)
+        for child in list(node.children):
+            if not child.is_leaf and len(child.children) == 1:
+                grandchild = child.children[0]
+                node.remove_child(child)
+                node.add_child(grandchild)
+                collapsed_count += 1
+                nodes_to_check.append(node)
+            elif not child.is_leaf:
+                nodes_to_check.append(child)
+
+    return collapsed_count
 
 
 def is_subspecies_or_below(taxid, ncbi):
@@ -660,43 +688,29 @@ def main(argv=None):
         count = children_counts[num_children]
         print(f"  Internal nodes with {num_children} children: {count}")
     
-    # Collapse internal nodes with only one child
+    # Collapse unary internal nodes by default to keep legacy topology output stable.
     if 1 in children_counts:
-        print(f"\nCollapsing {children_counts[1]} internal nodes with single children...")
-        nodes_to_check = [tree]
-        collapsed_count = 0
-        
-        while nodes_to_check:
-            node = nodes_to_check.pop(0)
-            
-            # Check each child
-            for child in list(node.children):  # Use list() to avoid modifying during iteration
-                if not child.is_leaf and len(child.children) == 1:
-                    # This child has only one child - collapse it
-                    grandchild = child.children[0]
-                    node.remove_child(child)
-                    node.add_child(grandchild)
-                    collapsed_count += 1
-                    # Check this node again in case there are multiple levels
-                    nodes_to_check.append(node)
-                else:
-                    # Add child to check queue if it's not a leaf
-                    if not child.is_leaf:
-                        nodes_to_check.append(child)
-        
-        print(f"  Collapsed {collapsed_count} single-child internal nodes")
-        
-        # Recount after collapsing
-        print("\nInternal node children counts after collapsing:")
-        children_counts_after = {}
-        for node in tree.traverse():
-            if not node.is_leaf:
-                num_children = len(node.children)
-                children_counts_after[num_children] = children_counts_after.get(num_children, 0) + 1
-        
-        for num_children in sorted(children_counts_after.keys()):
-            count = children_counts_after[num_children]
-            print(f"  Internal nodes with {num_children} children: {count}")
+        if args.preserve_single_child_internal_nodes:
+            print(
+                f"\nPreserving {children_counts[1]} internal nodes with single children "
+                "(requested by --preserve-single-child-internal-nodes)"
+            )
+        else:
+            print(f"\nCollapsing {children_counts[1]} internal nodes with single children...")
+            collapsed_count = collapse_single_child_internal_nodes(tree)
+            print(f"  Collapsed {collapsed_count} single-child internal nodes")
+
+            # Recount after collapsing
+            print("\nInternal node children counts after collapsing:")
+            children_counts_after = {}
+            for node in tree.traverse():
+                if not node.is_leaf:
+                    num_children = len(node.children)
+                    children_counts_after[num_children] = children_counts_after.get(num_children, 0) + 1
+
+            for num_children in sorted(children_counts_after.keys()):
+                count = children_counts_after[num_children]
+                print(f"  Internal nodes with {num_children} children: {count}")
     
     # Debug: check some internal node names
     print("\nDebug: Checking internal node names...")
