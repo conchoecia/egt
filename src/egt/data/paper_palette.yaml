@@ -177,10 +177,30 @@ clades:
     label: "Lepidoptera (other)"
     color: "#f0a6a5"
     phylopic_uuid: null
+  ditrysia_37567:
+    taxid: 37567
+    label: "Ditrysia"
+    color: "#de8896"
+    phylopic_uuid: null
   papilionoidea_37572:
     taxid: 37572
     label: "Papilionoidea"
     color: "#e88a8f"
+    phylopic_uuid: null
+  nymphalidae_33415:
+    taxid: 33415
+    label: "Nymphalidae"
+    color: "#e85f8d"
+    phylopic_uuid: null
+  heliconiinae_40037:
+    taxid: 40037
+    label: "Heliconiinae"
+    color: "#c94f78"
+    phylopic_uuid: null
+  polyommatinae_42297:
+    taxid: 42297
+    label: "Polyommatinae"
+    color: "#8f7bd1"
     phylopic_uuid: null
   bombycoidea_37569:
     taxid: 37569
@@ -200,17 +220,42 @@ clades:
   pyraloidea_37573:
     taxid: 37573
     label: "Pyraloidea"
-    color: "#c9a2a4"
+    color: "#ef8a6a"
     phylopic_uuid: null
   tortricoidea_37577:
     taxid: 37577
     label: "Tortricoidea"
     color: "#e0c0b8"
     phylopic_uuid: null
+  epinotia_29054:
+    taxid: 29054
+    label: "Epinotia"
+    color: "#c98e6f"
+    phylopic_uuid: null
   gelechioidea_37581:
     taxid: 37581
     label: "Gelechioidea"
     color: "#c99091"
+    phylopic_uuid: null
+  geometridae_82593:
+    taxid: 82593
+    label: "Geometridae"
+    color: "#a07bc2"
+    phylopic_uuid: null
+  larentiinae_104450:
+    taxid: 104450
+    label: "Larentiinae"
+    color: "#7d63ad"
+    phylopic_uuid: null
+  noctuidae_7100:
+    taxid: 7100
+    label: "Noctuidae"
+    color: "#a96379"
+    phylopic_uuid: null
+  noctuinae_95179:
+    taxid: 95179
+    label: "Noctuinae"
+    color: "#7c546b"
     phylopic_uuid: null
   coleoptera_7041:
     taxid: 7041
@@ -278,7 +323,7 @@ clades:
   coccinellidae_7080:
     taxid: 7080
     label: "Coccinellidae"
-    color: "#e64524"
+    color: "#d96b5f"
     phylopic_uuid: null
   staphylinidae_29026:
     taxid: 29026
@@ -288,7 +333,7 @@ clades:
   tenebrionidae_7065:
     taxid: 7065
     label: "Tenebrionidae"
-    color: "#7a5030"
+    color: "#9a7466"
     phylopic_uuid: null
 
   anthophila_3042114:

@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from egt import palette as palette_module
 from egt import phylotreeumap_plotdfs as plotdfs
 
 
@@ -15,6 +16,84 @@ def test_generate_distinct_colors_and_benedictus_helpers():
     assert len(colors) == 4
     assert all(color.startswith("#") and len(color) == 7 for color in colors)
     assert len(plotdfs.benedictus_n(5)) == 5
+
+
+def test_resolve_palette_phylum_color_uses_nearest_covered_ancestor_when_exact_missing(tmp_path: Path):
+    palette_yaml = tmp_path / "palette.yaml"
+    palette_yaml.write_text(
+        """
+schema_version: 1
+clades:
+  panarthropoda:
+    taxid: 88770
+    label: "Panarthropoda"
+    color: "#aa1122"
+    phylopic_uuid: null
+  deuterostomia:
+    taxid: 33511
+    label: "Deuterostomia"
+    color: "#334455"
+    phylopic_uuid: null
+fallback:
+  label: "other"
+  color: "#cccccc"
+""".lstrip()
+    )
+
+    palette = plotdfs.load_palette(str(palette_yaml))
+
+    arthropod_lineages = [
+        [1, 2759, 33154, 33208, 6072, 33213, 88770, 6656, 6961],
+        [1, 2759, 33154, 33208, 6072, 33213, 88770, 6656, 7041],
+    ]
+    color, taxid, label = plotdfs.resolve_palette_phylum_color(
+        "Arthropoda", arthropod_lineages, palette
+    )
+    assert (color, taxid, label) == ("#aa1122", 88770, "Panarthropoda")
+
+    chordate_lineages = [
+        [1, 2759, 33154, 33208, 6072, 33213, 33511, 7711, 7898],
+        [1, 2759, 33154, 33208, 6072, 33213, 33511, 7711, 8292],
+    ]
+    color, taxid, label = plotdfs.resolve_palette_phylum_color(
+        "Chordata", chordate_lineages, palette
+    )
+    assert (color, taxid, label) == ("#334455", 33511, "Deuterostomia")
+
+
+def test_recolor_df_with_palette_canonicalizes_merged_taxids(monkeypatch, tmp_path: Path):
+    class FakeCanonicalizer:
+        def canonicalize(self, taxid):
+            return {50: 100}.get(int(taxid), int(taxid))
+
+    monkeypatch.setattr(
+        palette_module,
+        "_get_shared_taxid_canonicalizer",
+        lambda: FakeCanonicalizer(),
+    )
+
+    palette_yaml = tmp_path / "palette.yaml"
+    palette_yaml.write_text(
+        """
+schema_version: 1
+clades:
+  merged_target:
+    taxid: 100
+    label: "Merged Target"
+    color: "#123abc"
+    phylopic_uuid: null
+fallback:
+  label: "other"
+  color: "#cccccc"
+""".lstrip()
+    )
+
+    palette = plotdfs.load_palette(str(palette_yaml))
+    df = pd.DataFrame({"taxid_list_str": ["1;50", "1;999"], "UMAP1": [0.0, 1.0], "UMAP2": [0.0, 1.0]})
+
+    recolored = plotdfs.recolor_df_with_palette(df, palette)
+
+    assert list(recolored["color"]) == ["#123abc", "#cccccc"]
 
 
 def test_parse_args_validates_conflicts_and_metadata(tmp_path: Path):
@@ -26,6 +105,10 @@ def test_parse_args_validates_conflicts_and_metadata(tmp_path: Path):
     args = plotdfs.parse_args(["-f", str(df), "-p", "out", "--metadata", str(meta), "--pdf"])
     assert args.metadata == [str(meta)]
     assert args.benedictus is False
+    assert args.palette is None
+    assert args.color_source == "df"
+    assert args.reference_df is None
+    assert args.recolored_df_out is None
 
     with pytest.raises(ValueError, match="Both directory and filelist"):
         plotdfs.parse_args(["-d", str(tmp_path), "-f", str(df), "-p", "out"])
@@ -125,6 +208,45 @@ def test_parse_metadata_dfs_colors_numeric_boolean_and_categorical(tmp_path: Pat
     assert merged.loc[merged["rbh"] == "r1", "custom_color"].iloc[0] == "#112233"
     assert merged.loc[merged["rbh"] == "r1", "flag_color"].iloc[0] != merged.loc[merged["rbh"] == "r2", "flag_color"].iloc[0]
     assert capsys.readouterr().out == ""
+
+
+def test_recolor_df_from_reference_df_uses_sample_or_rbh(tmp_path: Path):
+    df = pd.DataFrame(
+        {
+            "sample": ["s1", "s2", "s3"],
+            "UMAP1": [0.0, 1.0, 2.0],
+            "UMAP2": [1.0, 0.0, -1.0],
+            "color": ["#111111", "#222222", "#333333"],
+        }
+    )
+    ref = pd.DataFrame(
+        {
+            "sample": ["s1", "s2"],
+            "color": ["#abcdef", "#fedcba"],
+        }
+    )
+    recolored = plotdfs.recolor_df_from_reference_df(df, ref)
+    assert list(recolored["color"]) == ["#abcdef", "#fedcba", "#333333"]
+
+    df_rbh = pd.DataFrame({"rbh": ["r1"], "UMAP1": [0.0], "UMAP2": [0.0]})
+    ref_rbh = pd.DataFrame({"rbh": ["r1"], "color": ["#123456"]})
+    recolored_rbh = plotdfs.recolor_df_from_reference_df(df_rbh, ref_rbh)
+    assert list(recolored_rbh["color"]) == ["#123456"]
+
+
+def test_parse_args_requires_reference_df_for_reference_color_source(tmp_path: Path):
+    df = tmp_path / "subsample_phylum.neighbors_15.mind_0.1.df"
+    pd.DataFrame({"UMAP1": [0.0], "UMAP2": [1.0]}).to_csv(df, sep="\t")
+    ref = tmp_path / "ref.tsv"
+    pd.DataFrame({"sample": ["s1"], "color": ["#111111"]}).to_csv(ref, sep="\t")
+
+    args = plotdfs.parse_args(
+        ["-f", str(df), "-p", "out", "--color-source", "reference-df", "--reference-df", str(ref)]
+    )
+    assert args.reference_df == str(ref)
+
+    with pytest.raises(ValueError, match="--reference-df is required"):
+        plotdfs.parse_args(["-f", str(df), "-p", "out", "--color-source", "reference-df"])
 
 
 def test_parse_metadata_dfs_rejects_invalid_files(tmp_path: Path):

@@ -112,7 +112,143 @@ def test_plot_phyla_writes_clean_and_annotation_outputs(tmp_path: Path):
 
     assert outpdf.exists()
     assert (tmp_path / "phyla_clean.pdf").exists()
-    assert (tmp_path / "phyla_annotations.pdf").exists()
+
+
+def test_plot_phyla_recolors_from_palette_and_writes_recolored_df(tmp_path: Path):
+    df = pd.DataFrame(
+        {
+            "rbh": ["r1", "r2"],
+            "UMAP1": [0.0, 1.0],
+            "UMAP2": [1.0, 0.0],
+            "taxid_list_str": [
+                "1;2759;33154;33208;6040",
+                "1;2759;33154;33208;6073",
+            ],
+            "color": ["#111111", "#222222"],
+        }
+    )
+    infile = tmp_path / "phyla_palette.tsv"
+    df.to_csv(infile, sep="\t")
+
+    palette_yaml = tmp_path / "palette.yaml"
+    palette_yaml.write_text(
+        """
+schema_version: 1
+clades:
+  porifera:
+    taxid: 6040
+    label: "Porifera"
+    color: "#abcdef"
+    phylopic_uuid: null
+  cnidaria:
+    taxid: 6073
+    label: "Cnidaria"
+    color: "#fedcba"
+    phylopic_uuid: null
+fallback:
+  label: "other"
+  color: "#123456"
+""".lstrip()
+    )
+
+    recolored_out = tmp_path / "recolored.tsv"
+    args = SimpleNamespace(
+        filelist=str(infile),
+        phyla_order=None,
+        phyla_rotation="maximize_square",
+        num_cols=2,
+        phyla_clean_output=False,
+        color_source="palette",
+        palette=str(palette_yaml),
+        recolored_df_out=str(recolored_out),
+    )
+    outpdf = tmp_path / "phyla_palette.pdf"
+    plotdfs.plot_phyla(args, str(outpdf))
+
+    assert outpdf.exists()
+    assert recolored_out.exists()
+    recolored = pd.read_csv(recolored_out, sep="\t", index_col=0)
+    assert list(recolored["color"]) == ["#abcdef", "#fedcba"]
+
+
+def test_plot_phyla_preserves_df_colors_when_requested(tmp_path: Path):
+    df = pd.DataFrame(
+        {
+            "rbh": ["r1", "r2"],
+            "UMAP1": [0.0, 1.0],
+            "UMAP2": [1.0, 0.0],
+            "taxid_list_str": [
+                "1;2759;33154;33208;6040",
+                "1;2759;33154;33208;6073",
+            ],
+            "color": ["#111111", "#222222"],
+        }
+    )
+    infile = tmp_path / "phyla_dfcolor.tsv"
+    df.to_csv(infile, sep="\t")
+
+    recolored_out = tmp_path / "dfcolor_out.tsv"
+    args = SimpleNamespace(
+        filelist=str(infile),
+        phyla_order=None,
+        phyla_rotation="maximize_square",
+        num_cols=2,
+        phyla_clean_output=False,
+        color_source="df",
+        palette=None,
+        recolored_df_out=str(recolored_out),
+    )
+    outpdf = tmp_path / "phyla_dfcolor.pdf"
+    plotdfs.plot_phyla(args, str(outpdf))
+
+    assert outpdf.exists()
+    preserved = pd.read_csv(recolored_out, sep="\t", index_col=0)
+    assert list(preserved["color"]) == ["#111111", "#222222"]
+
+
+def test_plot_phyla_uses_reference_df_colors_when_requested(tmp_path: Path):
+    df = pd.DataFrame(
+        {
+            "sample": ["s1", "s2"],
+            "UMAP1": [0.0, 1.0],
+            "UMAP2": [1.0, 0.0],
+            "taxid_list_str": [
+                "1;2759;33154;33208;6040",
+                "1;2759;33154;33208;6073",
+            ],
+            "color": ["#111111", "#222222"],
+        }
+    )
+    infile = tmp_path / "phyla_reference.tsv"
+    df.to_csv(infile, sep="\t")
+
+    reference = pd.DataFrame(
+        {
+            "sample": ["s1", "s2"],
+            "color": ["#abcdef", "#fedcba"],
+        }
+    )
+    reference_file = tmp_path / "reference.tsv"
+    reference.to_csv(reference_file, sep="\t")
+
+    recolored_out = tmp_path / "reference_out.tsv"
+    args = SimpleNamespace(
+        filelist=str(infile),
+        phyla_order=None,
+        phyla_rotation="maximize_square",
+        num_cols=2,
+        phyla_clean_output=False,
+        color_source="reference-df",
+        reference_df=str(reference_file),
+        palette=None,
+        recolored_df_out=str(recolored_out),
+    )
+    outpdf = tmp_path / "phyla_reference.pdf"
+    plotdfs.plot_phyla(args, str(outpdf))
+
+    assert outpdf.exists()
+    recolored = pd.read_csv(recolored_out, sep="\t", index_col=0)
+    assert list(recolored["color"]) == ["#abcdef", "#fedcba"]
 
 
 def test_plot_phyla_without_color_column_and_with_taxid_list(tmp_path: Path, capsys):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from egt import palette as palette_module
 from egt.palette import CladeColor, Palette, add_palette_argument, load_palette
 
 
@@ -61,10 +62,44 @@ def test_palette_lineage_falls_back_on_unknown_values():
     assert resolved == palette.fallback
 
 
+def test_palette_canonicalizes_merged_taxids(monkeypatch, tmp_path):
+    class FakeCanonicalizer:
+        def canonicalize(self, taxid):
+            return {50: 100}.get(int(taxid), int(taxid))
+
+    monkeypatch.setattr(
+        palette_module,
+        "_get_shared_taxid_canonicalizer",
+        lambda: FakeCanonicalizer(),
+    )
+
+    palette_yaml = tmp_path / "palette.yaml"
+    palette_yaml.write_text(
+        """
+schema_version: 1
+clades:
+  merged_target:
+    taxid: 100
+    label: "Merged Target"
+    color: "#ABCDEF"
+    phylopic_uuid: null
+fallback:
+  label: "fallback"
+  color: "#123456"
+""".lstrip()
+    )
+
+    palette = load_palette(palette_yaml)
+
+    assert palette.has_taxid(50) is True
+    assert palette.for_taxid(50).taxid == 100
+    assert palette.for_lineage([50, 1]).taxid == 100
+    assert palette.for_lineage_string("1;50").taxid == 100
+
+
 def test_add_palette_argument_registers_default_dest():
     parser = argparse.ArgumentParser()
     add_palette_argument(parser)
     args = parser.parse_args([])
     assert hasattr(args, "palette")
     assert args.palette is None
-

@@ -1,0 +1,359 @@
+# Paper-wide simplified clade color palette.
+#
+# Simpler companion to `paper_palette.yaml` for static figures. The complex
+# palette remains available for interactive plots. Loader walks a species'
+# lineage most-specific first, so removing a subclade entry automatically
+# folds those taxa into the nearest retained ancestor color.
+#
+# Most colors were copied verbatim from the `color_dict_top` map in
+# `SplitLossColocTree` (src/egt/plot_alg_fusions.py). I've added a few
+# high-level scaffolding clades (Metazoa, Bilateria, Myriazoa,
+# Parahoxozoa) so lineage resolution never skips a whole subtree. The
+# per-clade selection is biologically-motivated (retention of favorite
+# Diptera genera, Mollusc families, vertebrate groups) — not a full
+# Linnean tree.
+
+schema_version: 1
+
+clades:
+
+  # --- Outgroups / scaffolding ---
+  cellular_organisms_131567:
+    taxid: 131567
+    label: "cellular organisms"
+    color: "#555555"
+    phylopic_uuid: null
+  eukaryota_2759:
+    taxid: 2759
+    label: "Eukaryota"
+    color: "#777777"
+    phylopic_uuid: null
+  opisthokonta_33154:
+    taxid: 33154
+    label: "Opisthokonta"
+    color: "#8a8a8a"
+    phylopic_uuid: null
+
+  # --- Metazoa and custom manuscript clades ---
+  metazoa_33208:
+    taxid: 33208
+    label: "Metazoa"
+    color: "#2c3e50"
+    phylopic_uuid: null
+  # Custom clade: Myriazoa = all animals except Ctenophora (Schultz 2023)
+  myriazoa_n67:
+    taxid: -67
+    label: "Myriazoa"
+    color: "#34495e"
+    phylopic_uuid: null
+  # Custom clade: Parahoxozoa = Cnidaria + Placozoa sister to Bilateria
+  parahoxozoa_n68:
+    taxid: -68
+    label: "Parahoxozoa"
+    color: "#495d70"
+    phylopic_uuid: null
+  eumetazoa_6072:
+    taxid: 6072
+    label: "Eumetazoa"
+    color: "#576877"
+    phylopic_uuid: null
+  bilateria_33213:
+    taxid: 33213
+    label: "Bilateria"
+    color: "#d4b26a"
+    phylopic_uuid: null
+
+  # --- Non-bilaterians (exact colors from plot_alg_fusions.py) ---
+  ctenophora_10197:
+    taxid: 10197
+    label: "Ctenophora"
+    color: "#54ab53"
+    phylopic_uuid: null
+  porifera_6040:
+    taxid: 6040
+    label: "Porifera"
+    color: "#682cae"
+    phylopic_uuid: null
+  cnidaria_6073:
+    taxid: 6073
+    label: "Cnidaria"
+    color: "#387fb2"
+    phylopic_uuid: null
+  placozoa_10226:
+    taxid: 10226
+    label: "Placozoa"
+    color: "#c72480"
+    phylopic_uuid: null
+
+  scalidophora_1215728:
+    taxid: 1215728
+    label: "Scalidophora"
+    color: "#2ecac8"
+    phylopic_uuid: null
+
+  # Nematoda — simplified relative to the full paper palette
+  nematoda_6231:
+    taxid: 6231
+    label: "Nematoda"
+    color: "#9f2eca"
+    phylopic_uuid: null
+
+  # Panarthropoda — split the 1670-species bin
+  panarthropoda_88770:
+    taxid: 88770
+    label: "Panarthropoda"
+    color: "#bf2424"
+    phylopic_uuid: null
+  arthropoda_6656:
+    taxid: 6656
+    label: "Arthropoda (arthropods)"
+    color: "#bf2424"
+    phylopic_uuid: null
+  tardigrada_42241:
+    taxid: 42241
+    label: "Tardigrada"
+    color: "#e8a5a5"
+    phylopic_uuid: null
+  onychophora_27563:
+    taxid: 27563
+    label: "Onychophora"
+    color: "#7a1f1f"
+    phylopic_uuid: null
+  # Arthropoda classes (non-Hexapoda)
+  chelicerata_6843:
+    taxid: 6843
+    label: "Chelicerata"
+    color: "#8b4a2c"
+    phylopic_uuid: null
+  myriapoda_61985:
+    taxid: 61985
+    label: "Myriapoda"
+    color: "#9c6540"
+    phylopic_uuid: null
+  crustacea_6657:
+    taxid: 6657
+    label: "Crustacea (crustaceans)"
+    color: "#1ec8aa"
+    phylopic_uuid: null
+  # Hexapoda — insect orders beyond user's existing Diptera/Drosophilinae/Polyphaga/Anthophila
+  insecta_50557:
+    taxid: 50557
+    label: "Insecta (insects)"
+    color: "#d78963"
+    phylopic_uuid: null
+  # Lepidoptera — simplified to roughly half the dedicated subclades from
+  # the full paper palette.
+  lepidoptera_7088:
+    taxid: 7088
+    label: "Lepidoptera (other)"
+    color: "#f0a6a5"
+    phylopic_uuid: null
+  nymphalidae_33415:
+    taxid: 33415
+    label: "Nymphalidae"
+    color: "#e85f8d"
+    phylopic_uuid: null
+  pyraloidea_37573:
+    taxid: 37573
+    label: "Pyraloidea"
+    color: "#ef8a6a"
+    phylopic_uuid: null
+  geometridae_82593:
+    taxid: 82593
+    label: "Geometridae"
+    color: "#a07bc2"
+    phylopic_uuid: null
+  noctuidae_7100:
+    taxid: 7100
+    label: "Noctuidae"
+    color: "#a96379"
+    phylopic_uuid: null
+  coleoptera_7041:
+    taxid: 7041
+    label: "Coleoptera"
+    color: "#c06b1b"
+    phylopic_uuid: null
+  hymenoptera_7399:
+    taxid: 7399
+    label: "Hymenoptera"
+    color: "#c4b85a"
+    phylopic_uuid: null
+  # Panarthropoda — insect sub-clades (user's fine-grained selection)
+  drosophilinae_43845:
+    taxid: 43845
+    label: "Drosophilinae"
+    color: "#f93ad5"
+    phylopic_uuid: null
+  anthophila_3042114:
+    taxid: 3042114
+    label: "Anthophila"
+    color: "#ebb836"
+    phylopic_uuid: null
+
+  # Diptera — flies, genus-level resolution
+  diptera_7147:
+    taxid: 7147
+    label: "Diptera"
+    color: "#c02424"
+    phylopic_uuid: null
+  # Culicidae — mosquitoes. Collapsed individual genera (Aedes/Culex/Toxorhynchites/
+  # Sabethini/Uranotaenia) were ≤6 species each; kept as Culicidae. Anopheles
+  # (31 sp) kept as its own bin because it's large and of epidemiological interest.
+  anopheles_7164:
+    taxid: 7164
+    label: "Anopheles"
+    color: "#faa42c"
+    phylopic_uuid: null
+
+  # Spiralia
+  spiralia_2697495:
+    taxid: 2697495
+    label: "Spiralia"
+    color: "#2432bf"
+    phylopic_uuid: null
+  mollusca_6447:
+    taxid: 6447
+    label: "Mollusca"
+    color: "#0cd6f2"
+    phylopic_uuid: null
+  bivalvia_6544:
+    taxid: 6544
+    label: "Bivalvia (bivalves)"
+    color: "#3b9110"
+    phylopic_uuid: null
+  gastropoda_6448:
+    taxid: 6448
+    label: "Gastropoda"
+    color: "#bd47ea"
+    phylopic_uuid: null
+  # (Patella — limpet genus, 6 sp; collapsed into Gastropoda)
+  # (Pecten maximus — single-species entry; collapsed into Bivalvia)
+  # (Cephalopoda residual — covered by Decapodiformes + Octopodiformes below)
+  decapodiformes_215450:
+    taxid: 215450
+    label: "Decapodiformes"
+    color: "#fa9420"
+    phylopic_uuid: null
+  octopodiformes_215451:
+    taxid: 215451
+    label: "Octopodiformes"
+    color: "#b2991d"
+    phylopic_uuid: null
+  annelida_6340:
+    taxid: 6340
+    label: "Annelida"
+    color: "#0cf247"
+    phylopic_uuid: null
+  gnathifera_2697496:
+    taxid: 2697496
+    label: "Gnathifera"
+    color: "#7624bf"
+    phylopic_uuid: null
+
+  # --- Deuterostomia (exact colors from plot_alg_fusions.py) ---
+  deuterostomia_33511:
+    taxid: 33511
+    label: "Deuterostomia"
+    color: "#78a6af"
+    phylopic_uuid: null
+
+  chordata_7711:
+    taxid: 7711
+    label: "Chordata"
+    color: "#78a6af"
+    phylopic_uuid: null
+
+  # Chondrichthyes
+  chondrichthyes_7777:
+    taxid: 7777
+    label: "Chondrichthyes (cartilaginous fishes)"
+    color: "#78e576"
+    phylopic_uuid: null
+
+  # Actinopterygii — ray-finned fish
+  neopterygii_41665:
+    taxid: 41665
+    label: "Neopterygii / Teleostei (ray-finned fishes)"
+    color: "#bd5812"
+    phylopic_uuid: null
+  # Teleost orders (simplified relative to the full paper palette)
+  salmoniformes_8006:
+    taxid: 8006
+    label: "Salmoniformes (salmons and trout)"
+    color: "#f4a878"
+    phylopic_uuid: null
+  percomorphaceae_1489872:
+    taxid: 1489872
+    label: "Percomorphaceae (perch-like fishes)"
+    color: "#c07535"
+    phylopic_uuid: null
+  # Cypriniformes simplified to a single retained group
+  cypriniformes_7952:
+    taxid: 7952
+    label: "Cypriniformes (carps, minnows, loaches)"
+    color: "#4be2ba"
+    phylopic_uuid: null
+  # (Cobitoidea — no taxid available in ete4 NCBI DB; skip for now)
+
+  # Amniota
+  primates_9443:
+    taxid: 9443
+    label: "Primates"
+    color: "#f58e8c"
+    phylopic_uuid: null
+  carnivora_33554:
+    taxid: 33554
+    label: "Carnivora"
+    color: "#8a0303"
+    phylopic_uuid: null
+  metatheria_9263:
+    taxid: 9263
+    label: "Marsupials"
+    color: "#5fa4e2"
+    phylopic_uuid: null
+  aves_8782:
+    taxid: 8782
+    label: "Aves"
+    color: "#4a6987"
+    phylopic_uuid: null
+  # Amphibia (NCBI: taxid 8342 was reassigned to Anura only; use 8292 Lissamphibia for all amphibians)
+  amphibia_8292:
+    taxid: 8292
+    label: "Amphibia"
+    color: "#afc73e"
+    phylopic_uuid: null
+
+  # --- Residual Deuterostomia: non-vertebrate + additional vertebrate
+  # sub-clades (split the 427-sp bin) ---
+  echinodermata_7586:
+    taxid: 7586
+    label: "Echinodermata (echinoderms)"
+    color: "#e89cb3"
+    phylopic_uuid: null
+  hemichordata_10219:
+    taxid: 10219
+    label: "Hemichordata"
+    color: "#c4a68f"
+    phylopic_uuid: null
+  tunicata_7712:
+    taxid: 7712
+    label: "Tunicata (tunicates)"
+    color: "#a890bd"
+    phylopic_uuid: null
+  # Reptiles (non-turtle)
+  squamata_8509:
+    taxid: 8509
+    label: "Squamata"
+    color: "#7ec850"
+    phylopic_uuid: null
+  testudines_8459:
+    taxid: 8459
+    label: "Testudines (turtles)"
+    color: "#6a9360"
+    phylopic_uuid: null
+  # Other birds (non-Passeriformes/Anseriformes)
+  # Other mammals (non-Primates/Carnivora/Metatheria/Pecora)
+# Fallback color for taxa whose ancestry does not match any entry above.
+fallback:
+  color: "#bfbfbf"
+  label: "other"

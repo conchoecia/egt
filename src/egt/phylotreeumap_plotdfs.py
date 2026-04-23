@@ -3,6 +3,8 @@
 # Take in a list of datafraes from samples and constructs a comparison of the UMAP plots.
 """
 import argparse
+import ast
+from collections import Counter
 import numpy as np
 import os
 import pandas as pd
@@ -16,6 +18,7 @@ import matplotlib.colors as mcolors
 from matplotlib.colors import Normalize, LinearSegmentedColormap
 from matplotlib.cm import ScalarMappable
 from egt._vendor import odp_plotting_functions as odpf
+from egt.palette import add_palette_argument, load_palette
 
 # for the html version
 from bokeh.plotting import figure, output_file, save
@@ -174,6 +177,7 @@ def parse_args(argv=None):
     flstr += "  If you use this in combination with the --plot_features flag, this must only be one file."
     parser.add_argument("-f", "--filelist", help = flstr)
     parser.add_argument("-p", "--prefix",   help = "The pdf file to which we want to save our results.", required = True)
+    add_palette_argument(parser)
     mdstr  = "Optional metadata files with one 'rbh' column to join against the main dataframe, and other columns to annotate the plot."
     mdstr += "  If the metadata column does not contain an additional column called *_color, the dots will be assigned colors."
     mdstr += "  The colors will be assigned a gradient if numeric, or a random color if the column if categorical."
@@ -189,6 +193,15 @@ def parse_args(argv=None):
                         help="For --plot-phyla, also output a clean version without labels, vectors, or grid lines (saved as {prefix}_clean.pdf)")
     parser.add_argument("--phyla-order", type=str, default=None,
                         help="Space-delimited list of phyla names to plot in custom order (e.g., 'Chordata Arthropoda Mollusca'). Only specified phyla will be plotted. The 2x2 'All Phyla' panel will still be shown.")
+    parser.add_argument("--all-panel-span", type=int, default=2,
+                        help="Side length in grid cells for the large 'All Phyla' panel in --plot-phyla mode (default: 2).")
+    parser.add_argument("--color-source", type=str, default="df",
+                        choices=["df", "palette", "reference-df"],
+                        help="For --plot-phyla, use the existing dataframe color column ('df'), override colors from the shared palette ('palette'), or copy colors from another dataframe keyed by sample/rbh ('reference-df').")
+    parser.add_argument("--reference-df", type=str, default=None,
+                        help="Reference dataframe used when --color-source reference-df. Must contain 'color' plus either 'sample' or 'rbh'.")
+    parser.add_argument("--recolored-df-out", type=str, default=None,
+                        help="Optional path to write a copy of the input dataframe using the selected --color-source.")
     parser.add_argument("--genome-min-bp", type=float, default=None,
                         help="Minimum genome size (bp). Values <= this are shown as --genome-min-color (grey).")
     parser.add_argument("--genome-max-bp", type=float, default=None,
@@ -211,6 +224,12 @@ def parse_args(argv=None):
                         help="Number of columns for --plot_features or --plot-phyla grid layout. If not specified, uses sqrt of total panels (square grid).")
 
     args = parser.parse_args(argv)
+
+    if args.color_source == "reference-df":
+        if not args.reference_df:
+            raise ValueError("--reference-df is required when --color-source reference-df")
+        if not os.path.exists(args.reference_df):
+            raise ValueError(f"Reference dataframe does not exist: {args.reference_df}")
 
     # --- normalize --phylolist to a list of paths ---
     files = args.phylolist
@@ -282,6 +301,157 @@ def parse_args(argv=None):
     args.benedictus = args.threecolor
 
     return args
+
+
+def _parse_lineage_taxids(row):
+    """Return lineage taxids in root-to-leaf order from a plotdf row."""
+    taxids = []
+
+    if "taxid_list" in row.index and pd.notna(row["taxid_list"]):
+        try:
+            raw_taxids = row["taxid_list"]
+            if isinstance(raw_taxids, str):
+                raw_taxids = ast.literal_eval(raw_taxids)
+            if isinstance(raw_taxids, list):
+                taxids = [int(x) for x in raw_taxids]
+        except (ValueError, SyntaxError, TypeError):
+            taxids = []
+
+    if not taxids and "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
+        try:
+            taxids = [int(x) for x in str(row["taxid_list_str"]).split(";") if x.strip()]
+        except ValueError:
+            taxids = []
+
+    return taxids
+
+
+def recolor_df_with_palette(df, palette):
+    """Return a copy of ``df`` with palette-resolved clade colors."""
+    recolored = df.copy()
+
+    if "taxid_list_str" not in recolored.columns and "taxid_list" not in recolored.columns:
+        raise ValueError(
+            "DataFrame must contain either 'taxid_list' or 'taxid_list_str' to recolor with the palette."
+        )
+
+    def _resolve_color(row):
+        if "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
+            return palette.for_lineage_string(row["taxid_list_str"]).color
+
+        taxids = _parse_lineage_taxids(row)
+        if not taxids:
+            return palette.fallback.color
+        return palette.for_lineage(reversed(taxids)).color
+
+    recolored["color"] = recolored.apply(_resolve_color, axis=1)
+    return recolored
+
+
+def recolor_df_from_reference_df(df, reference_df):
+    """Return a copy of ``df`` using colors looked up from ``reference_df``.
+
+    The lookup key is ``sample`` when present in both dataframes, otherwise
+    ``rbh`` when present in both. Unmatched rows keep their existing color if
+    available, otherwise fall back to ``#3f3f7f``.
+    """
+    if "color" not in reference_df.columns:
+        raise ValueError("Reference dataframe must contain a 'color' column.")
+
+    join_key = None
+    for candidate in ("sample", "rbh"):
+        if candidate in df.columns and candidate in reference_df.columns:
+            join_key = candidate
+            break
+    if join_key is None:
+        raise ValueError(
+            "Reference dataframe must share either a 'sample' or 'rbh' column with the input dataframe."
+        )
+
+    ref = reference_df[[join_key, "color"]].copy()
+    ref[join_key] = ref[join_key].astype(str).str.strip()
+    ref["color"] = ref["color"].astype(str).str.strip()
+
+    duplicate_colors = ref.groupby(join_key)["color"].nunique()
+    conflicting = duplicate_colors[duplicate_colors > 1]
+    if len(conflicting) > 0:
+        raise ValueError(
+            f"Reference dataframe has conflicting colors for {len(conflicting)} {join_key} entries."
+        )
+
+    color_lookup = ref.drop_duplicates(subset=[join_key]).set_index(join_key)["color"]
+
+    recolored = df.copy()
+    recolored[join_key] = recolored[join_key].astype(str).str.strip()
+    fallback_colors = (
+        recolored["color"].astype(str).str.strip()
+        if "color" in recolored.columns
+        else pd.Series(["#3f3f7f"] * len(recolored), index=recolored.index)
+    )
+    mapped = recolored[join_key].map(color_lookup)
+    recolored["color"] = mapped.fillna(fallback_colors)
+
+    matched = int(mapped.notna().sum())
+    print(
+        f"Reference color merge: matched {matched} of {len(recolored)} rows "
+        f"using '{join_key}' from the reference dataframe"
+    )
+    return recolored
+
+
+def _nearest_palette_taxid_at_or_above_anchor(taxids, anchor_taxid, palette):
+    """Return the nearest palette-covered taxid at/above ``anchor_taxid``.
+
+    ``taxids`` must be in root-to-leaf order. We look for the deepest occurrence
+    of ``anchor_taxid`` first, then walk back toward the root until we find a
+    palette-covered node.
+    """
+    if not taxids:
+        return None
+
+    try:
+        anchor_idx = max(i for i, tid in enumerate(taxids) if int(tid) == int(anchor_taxid))
+    except ValueError:
+        return None
+
+    for tid in reversed(taxids[: anchor_idx + 1]):
+        clade = palette.for_taxid(int(tid))
+        if clade != palette.fallback:
+            return clade.taxid
+    return None
+
+
+def resolve_palette_phylum_color(phylum_name, lineage_taxids, palette):
+    """Return a stable display color for a phylum in palette mode.
+
+    Preference order:
+      1. exact palette entry for the phylum taxid
+      2. nearest palette-covered ancestor above the phylum taxid, using the
+         most common result across the phylum's members
+      3. palette fallback color
+
+    Returns ``(color, taxid, label)`` for logging/debugging.
+    """
+    phylum_taxid = phylum_to_taxid[phylum_name]["taxid"]
+
+    clade = palette.for_taxid(phylum_taxid)
+    if clade != palette.fallback:
+        return clade.color, clade.taxid, clade.label
+
+    candidate_taxids = []
+    for taxids in lineage_taxids:
+        candidate_taxid = _nearest_palette_taxid_at_or_above_anchor(
+            taxids, phylum_taxid, palette
+        )
+        if candidate_taxid is not None:
+            candidate_taxids.append(candidate_taxid)
+
+    if not candidate_taxids:
+        return palette.fallback.color, palette.fallback.taxid, palette.fallback.label
+
+    representative_taxid, _ = Counter(candidate_taxids).most_common(1)[0]
+    clade = palette.for_taxid(representative_taxid)
+    return clade.color, clade.taxid, clade.label
 
 
 def generate_df_dict(args):
@@ -1144,9 +1314,6 @@ def plot_phyla(args, outpdf, metadata_df=None):
     Parses taxid information from 'taxid_list' or 'taxid_list_str' columns.
     Uses the phylum_to_taxid dictionary to map taxids to phyla.
     """
-    from matplotlib.backends.backend_pdf import PdfPages
-    import ast
-    
     GREY_COLOR = "#D5D7DF"
     
     # Create reverse mapping: taxid -> phylum name
@@ -1170,30 +1337,32 @@ def plot_phyla(args, outpdf, metadata_df=None):
     # Check for required columns
     if "UMAP1" not in df.columns or "UMAP2" not in df.columns:
         raise ValueError("DataFrame must contain 'UMAP1' and 'UMAP2' columns")
+
+    color_source = getattr(args, "color_source", "df")
+    palette = None
+    if color_source == "palette":
+        palette = load_palette(getattr(args, "palette", None))
+        df = recolor_df_with_palette(df, palette)
+    elif color_source == "reference-df":
+        reference_df = pd.read_csv(getattr(args, "reference_df"), sep="\t", index_col=0)
+        df = recolor_df_from_reference_df(df, reference_df)
+    elif color_source != "df":
+        raise ValueError(f"Unsupported color_source: {color_source}")
+    elif "color" not in df.columns:
+        print("No existing color column found; falling back to palette-derived colors.")
+        palette = load_palette(getattr(args, "palette", None))
+        df = recolor_df_with_palette(df, palette)
+
+    recolored_df_out = getattr(args, "recolored_df_out", None)
+    if recolored_df_out:
+        df.to_csv(recolored_df_out, sep="\t")
+        print(f"Wrote recolored dataframe to {recolored_df_out}")
     
     # Parse taxid information to determine phylum
-    def parse_taxids(row):
+    def parse_taxids(taxids):
         """Parse taxid_list or taxid_list_str to extract phylum.
         Returns the most specific (last/deepest) phylum match in the lineage."""
-        taxids = []
-        
-        # Try taxid_list first (format: "[1, 131567, 2759, ...]")
-        if "taxid_list" in row.index and pd.notna(row["taxid_list"]):
-            try:
-                if isinstance(row["taxid_list"], str):
-                    taxids = ast.literal_eval(row["taxid_list"])
-                elif isinstance(row["taxid_list"], list):
-                    taxids = row["taxid_list"]
-            except Exception as e:
-                pass  # silently skip parse errors
-        
-        # Try taxid_list_str if taxid_list didn't work (format: "1;131567;2759;...")
-        if not taxids and "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
-            try:
-                taxids = [int(x) for x in str(row["taxid_list_str"]).split(";") if x.strip()]
-            except Exception as e:
-                pass  # silently skip parse errors
-        
+
         # Special case: Acanthocephala (taxid 10232) is now considered part of Rotifera
         # Check for this taxid first before doing normal phylum lookup
         if 10232 in taxids:
@@ -1214,7 +1383,8 @@ def plot_phyla(args, outpdf, metadata_df=None):
     
     # Parse phylum for each row
     print("Parsing taxid information to determine phyla...")
-    df["phylum"] = df.apply(parse_taxids, axis=1)
+    df["_lineage_taxids"] = df.apply(_parse_lineage_taxids, axis=1)
+    df["phylum"] = df["_lineage_taxids"].apply(parse_taxids)
     
     # Get unique phyla present in the data
     phyla_in_data_original = df["phylum"].dropna().unique()
@@ -1301,23 +1471,27 @@ def plot_phyla(args, outpdf, metadata_df=None):
     
     print(f"Found {len(phyla_in_data_all)} unique phyla in data: {sorted(phyla_in_data_all)}")
     
-    # Generate colors for each phylum
-    # If the dataframe has a 'color' column, use those colors directly for plotting
-    # Otherwise, generate distinct colors for each phylum
+    # Generate colors for each phylum only as a fallback. The actual plotting
+    # path should use per-row colors whenever the dataframe has a "color"
+    # column; that preserves the hierarchical "most specific palette hit wins"
+    # logic in the All panel and in highlighted panels.
     if "color" in df.columns:
-        # Use the existing color column directly - each sample keeps its own color
-        # This preserves the original taxonomic-specific colors
         use_existing_colors = True
-        phylum_colors = {}  # We'll still need this for the legend/reference
+        phylum_colors = {}
         for phylum in phyla_in_data_all:
             phylum_mask = df["phylum"] == phylum
             if phylum_mask.any():
-                # Get the most common color for this phylum (for legend purposes)
                 colors = df.loc[phylum_mask, "color"].mode()
                 if len(colors) > 0:
                     phylum_colors[phylum] = colors.iloc[0]
                 else:
                     phylum_colors[phylum] = "#000000"
+        if color_source == "palette":
+            print(
+                "\nUsing palette-resolved per-row colors for the All panel and "
+                "for highlighted points; only non-highlighted background points "
+                "are greyed out in side panels."
+            )
     else:
         # Generate distinct colors for each phylum
         use_existing_colors = False
@@ -1440,14 +1614,16 @@ def plot_phyla(args, outpdf, metadata_df=None):
         panel_aspect_ratio = 1.0
         print(f"  Using square panels")
     
-    # Calculate grid layout - "All Phyla" will be 2x2, others are 1x1
-    # The "All Phyla" panel takes up 4 slots (positions 0,0 to 1,1)
+    all_panel_span = max(1, int(getattr(args, "all_panel_span", 2)))
+
+    # Calculate grid layout - "All Phyla" occupies all_panel_span x all_panel_span,
+    # others are 1x1.
     num_phyla_panels = len(phyla_in_data)
     
     # Calculate grid size: we need space for num_phyla_panels regular panels 
-    # plus the 2x2 "All Phyla" panel (which uses 4 grid positions but counts as 1 panel)
-    # We'll add 3 to account for the 4 slots used by the large panel
-    total_grid_slots = num_phyla_panels + 3
+    # plus the large "All Phyla" panel (which uses all_panel_span^2 slots but
+    # counts as 1 panel).
+    total_grid_slots = num_phyla_panels + (all_panel_span * all_panel_span) - 1
     
     # Respect --num-cols if provided, otherwise calculate from sqrt
     if args.num_cols is not None:
@@ -1457,11 +1633,11 @@ def plot_phyla(args, outpdf, metadata_df=None):
     
     num_rows = int(np.ceil(total_grid_slots / num_cols))
     
-    # Ensure we have at least 2 rows and 2 cols for the large panel
-    if num_cols < 2:
-        num_cols = 2
-    if num_rows < 2:
-        num_rows = 2
+    # Ensure we have enough rows/cols for the large panel.
+    if num_cols < all_panel_span:
+        num_cols = all_panel_span
+    if num_rows < all_panel_span:
+        num_rows = all_panel_span
     
     # Figure dimensions - adjust based on panel aspect ratio
     margin = 0.25
@@ -1491,12 +1667,15 @@ def plot_phyla(args, outpdf, metadata_df=None):
             matplotlib figure object
         """
         fig_new = plt.figure(figsize=(fig_width, fig_height))
+        outline_only_mode = (not include_points) and include_grid
+        outline_color = "#B8BDC8"
+        outline_lw = 0.8
         
         # Create axes grid - regular sized panels
         axes_new = [[None for _ in range(num_cols)] for _ in range(num_rows)]
         for ii in range(num_rows):
             for jj in range(num_cols):
-                if ii < 2 and jj < 2:
+                if ii < all_panel_span and jj < all_panel_span:
                     continue
                 left = (4 * margin) + (jj * panel_width) + (jj * margin)
                 bottom = fig_height - ((4 * margin) + ((ii + 1) * panel_height) + (ii * margin))
@@ -1509,14 +1688,19 @@ def plot_phyla(args, outpdf, metadata_df=None):
                 ax.set_xticks([])
                 ax.set_yticks([])
                 for spine in ["top", "right", "bottom", "left"]:
-                    ax.spines[spine].set_visible(False)
+                    ax.spines[spine].set_visible(outline_only_mode)
+                    if outline_only_mode:
+                        ax.spines[spine].set_color(outline_color)
+                        ax.spines[spine].set_linewidth(outline_lw)
                 axes_new[ii][jj] = ax
         
-        # Create the large "All Phyla" panel spanning 2x2 in top-left
+        # Create the large "All Phyla" panel spanning all_panel_span x all_panel_span
         left_large = (4 * margin)
-        bottom_large = fig_height - ((4 * margin) + (2 * panel_height) + (1 * margin))
-        width_large = (2 * panel_width) + margin
-        height_large = (2 * panel_height) + margin
+        bottom_large = fig_height - (
+            (4 * margin) + (all_panel_span * panel_height) + ((all_panel_span - 1) * margin)
+        )
+        width_large = (all_panel_span * panel_width) + ((all_panel_span - 1) * margin)
+        height_large = (all_panel_span * panel_height) + ((all_panel_span - 1) * margin)
         ax_large_new = fig_new.add_axes([
             left_large / fig_width,
             bottom_large / fig_height,
@@ -1526,7 +1710,10 @@ def plot_phyla(args, outpdf, metadata_df=None):
         ax_large_new.set_xticks([])
         ax_large_new.set_yticks([])
         for spine in ["top", "right", "bottom", "left"]:
-            ax_large_new.spines[spine].set_visible(False)
+            ax_large_new.spines[spine].set_visible(outline_only_mode)
+            if outline_only_mode:
+                ax_large_new.spines[spine].set_color(outline_color)
+                ax_large_new.spines[spine].set_linewidth(outline_lw)
         
         # Add figure title if requested
         if include_labels:
@@ -1598,7 +1785,7 @@ def plot_phyla(args, outpdf, metadata_df=None):
         phylum_idx_new = 0
         for ii in range(num_rows):
             for jj in range(num_cols):
-                if ii < 2 and jj < 2:
+                if ii < all_panel_span and jj < all_panel_span:
                     continue
                 if phylum_idx_new >= len(phyla_in_data):
                     break
@@ -1675,45 +1862,33 @@ def plot_phyla(args, outpdf, metadata_df=None):
             for jj in range(1, num_cols):
                 x_pos = ((4 * margin) + (jj * panel_width) + (jj * margin) - (margin / 2)) / fig_width
                 
-                if jj < 2:
-                    y_top = ((fig_height - ((4 * margin) + (2 * panel_height) + (2 * margin))) / fig_height)
+                if jj < all_panel_span:
+                    y_top = bottom_large / fig_height
                     y_bottom = ((4 * margin) / fig_height)
-                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
-                    fig_new.add_artist(line)
-                elif jj == 2:
-                    y_top = ((fig_height - (4 * margin)) / fig_height)
-                    y_bottom = ((4 * margin) / fig_height)
-                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
                 else:
                     y_top = ((fig_height - (4 * margin)) / fig_height)
                     y_bottom = ((4 * margin) / fig_height)
-                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
             
             for ii in range(1, num_rows):
                 y_pos = ((fig_height - ((4 * margin) + (ii * panel_height) + (ii * margin) - (margin / 2))) / fig_height)
                 
-                if ii < 2:
-                    x_left = ((4 * margin) + (2 * panel_width) + (2 * margin)) / fig_width
+                if ii < all_panel_span:
+                    x_left = (left_large + width_large) / fig_width
                     x_right = ((fig_width - (4 * margin)) / fig_width)
-                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
-                    fig_new.add_artist(line)
-                elif ii == 2:
-                    x_left = ((4 * margin) / fig_width)
-                    x_right = ((fig_width - (4 * margin)) / fig_width)
-                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
                 else:
                     x_left = ((4 * margin) / fig_width)
                     x_right = ((fig_width - (4 * margin)) / fig_width)
-                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
         
         return fig_new
@@ -1721,7 +1896,7 @@ def plot_phyla(args, outpdf, metadata_df=None):
     # Create and save the main figure with all elements
     fig = create_phyla_figure(include_points=True, include_labels=True, include_grid=True, include_vectors=True)
     print(f"Saving phyla plot to {outpdf}")
-    plt.savefig(outpdf)
+    fig.savefig(outpdf)
     print(f"Saved phyla plot to {outpdf}")
     
     # If clean output requested, create additional versions
@@ -1731,18 +1906,9 @@ def plot_phyla(args, outpdf, metadata_df=None):
         print(f"\nCreating clean version without annotations...")
         fig_clean = create_phyla_figure(include_points=True, include_labels=False, include_grid=False, include_vectors=False)
         print(f"Saving clean phyla plot to {clean_outpdf}")
-        plt.savefig(clean_outpdf)
+        fig_clean.savefig(clean_outpdf)
         print(f"Saved clean phyla plot to {clean_outpdf}")
         plt.close(fig_clean)
-        
-        # Annotations-only version: all annotations, no data points
-        annotations_outpdf = outpdf.replace('.pdf', '_annotations.pdf')
-        print(f"\nCreating annotations-only version (no data points)...")
-        fig_annot = create_phyla_figure(include_points=False, include_labels=True, include_grid=True, include_vectors=True)
-        print(f"Saving annotations-only phyla plot to {annotations_outpdf}")
-        plt.savefig(annotations_outpdf)
-        print(f"Saved annotations-only phyla plot to {annotations_outpdf}")
-        plt.close(fig_annot)
     
     plt.close(fig)
 
