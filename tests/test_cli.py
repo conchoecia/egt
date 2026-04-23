@@ -6,6 +6,7 @@ Real analysis correctness is not exercised here; see the per-module tests
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -15,10 +16,14 @@ from egt import cli
 
 
 def _run(*argv: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.setdefault("NUMBA_CACHE_DIR", "/tmp/egt-test-numba-cache")
+    env.setdefault("MPLCONFIGDIR", "/tmp/egt-test-mpl-cache")
     return subprocess.run(
         [sys.executable, "-m", "egt.cli", *argv],
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -54,6 +59,7 @@ SUBCOMMANDS_SMOKE = [
     "aggregate-filesizes",
     "join-supplementary-tables",
     "phylotreeumap-plotdfs",
+    "umap-taxonomy-clusters",
     "count-unique-changes",
     "branch-stats-vs-time",
     "branch-stats-tree",
