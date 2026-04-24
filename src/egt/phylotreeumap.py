@@ -29,6 +29,7 @@ from  ast import literal_eval as aliteraleval
 import bokeh           # bokeh is used to visualize and save the UMAP
 from ete4 import NCBITaxa,Tree
 import html
+import json
 import networkx as nx
 import numpy as np
 np.set_printoptions(linewidth=np.inf)
@@ -1650,6 +1651,64 @@ def _normalize_custom_taxonomy_columns(plot_data):
     return plot_data
 
 
+# ---------------------------------------------------------------------------
+# UI theme (shared between Python HTML templates and CustomJS string literals)
+# Keep in sync with _THEME_JS below.
+# ---------------------------------------------------------------------------
+_UI_FONT_SANS = (
+    '"Inter Tight", "Inter", ui-sans-serif, system-ui, -apple-system, '
+    '"Segoe UI", "Helvetica Neue", Arial, sans-serif'
+)
+_UI_FONT_MONO = (
+    '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, '
+    '"Liberation Mono", monospace'
+)
+_UI_BG = "#f6f3ee"
+_UI_BG_SOFT = "#fbfaf7"
+_UI_BG_RAISED = "#ffffff"
+_UI_BORDER = "#d8d4cc"
+_UI_BORDER_SOFT = "#e7e3d9"
+_UI_FG = "#25231f"
+_UI_FG_MUTED = "#6f6a5f"
+_UI_ACCENT = "#376f6b"
+_UI_ACCENT_SOFT = "#e6efed"
+_UI_ACCENT_FG = "#1f3935"
+_UI_WARN = "#b7791f"
+_UI_RULE = "#c8c2b5"
+_UI_CHIP_HOVER = "#efeadf"
+
+_SCOPE_KEYS = (
+    ("all", "All"),
+    ("search_results", "Filtered"),
+    ("lasso_selection", "Lasso"),
+    ("table_selection", "Table"),
+)
+
+
+def _scope_switcher_html(active_key="all"):
+    """Inline scope toggle pill row embedded in the active-view banner."""
+    buttons = []
+    for key, label in _SCOPE_KEYS:
+        is_active = (key == active_key)
+        bg = _UI_ACCENT if is_active else "transparent"
+        fg = "#ffffff" if is_active else _UI_ACCENT_FG
+        border = _UI_ACCENT if is_active else _UI_RULE
+        buttons.append(
+            f'<button type="button" data-scope-key="{key}" '
+            f'class="egt-scope-btn{ " active" if is_active else ""}" '
+            f'style="all:unset;cursor:pointer;padding:3px 10px;border-radius:999px;'
+            f'border:1px solid {border};background:{bg};color:{fg};'
+            f'font-family:{_UI_FONT_SANS};font-size:11px;font-weight:600;'
+            f'letter-spacing:.03em;">{html.escape(label)}</button>'
+        )
+    return (
+        '<span class="egt-scope-switcher" style="display:inline-flex;gap:6px;'
+        'margin-left:12px;vertical-align:middle;">'
+        + "".join(buttons)
+        + "</span>"
+    )
+
+
 def _taxonomy_summary_default_html(plot_data, analysis_type):
     """Return initial HTML for the plot exploration summary panel."""
     indices = list(range(len(plot_data)))
@@ -1708,59 +1767,83 @@ def _taxonomy_summary_default_html(plot_data, analysis_type):
 
     top_items = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:8]
     total = len(indices)
-    top_label, top_count = ("None", 0) if not top_items else top_items[0]
     shared_label = shared[-1] if shared else "No single shared ancestor"
-    shared_lineage = "; ".join(shared)
-    composition_label = f"Subclades below {shared_label}" if shared else "Composition"
+    shared_lineage = " › ".join(shared)
+    composition_label = f"Composition below {shared_label}" if shared else "Composition"
 
     bar_html = []
     for label, count in top_items:
         pct = (count / total * 100.0) if total else 0.0
         bar_html.append(
-            "<div style=\"margin:7px 0;\">"
-            f"<div style=\"display:flex;justify-content:space-between;gap:10px;font-size:12px;\">"
-            f"<span style=\"overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{escape(label)}</span>"
-            f"<span>{count} ({pct:.1f}%)</span>"
-            "</div>"
-            "<div style=\"height:8px;background:#e8e6df;border-radius:4px;overflow:hidden;\">"
-            f"<div style=\"height:8px;width:{pct:.1f}%;background:#376f6b;\"></div>"
-            "</div>"
+            '<div style="display:grid;grid-template-columns:1fr 64px 72px;'
+            'align-items:center;column-gap:10px;margin:5px 0;font-size:12px;">'
+            f'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(label)}</span>'
+            f'<span style="font-family:{_UI_FONT_MONO};font-size:11px;color:{_UI_FG_MUTED};'
+            f'text-align:right;">{count}&nbsp;·&nbsp;{pct:.1f}%</span>'
+            f'<span style="height:6px;background:{_UI_BORDER_SOFT};border-radius:3px;overflow:hidden;">'
+            f'<span style="display:block;height:6px;width:{pct:.1f}%;background:{_UI_ACCENT};"></span>'
+            '</span>'
             "</div>"
         )
 
     if not bar_html:
-        bar_html.append("<div style=\"color:#6f6a5f;font-size:12px;\">No taxonomy fields available for this dataset.</div>")
+        bar_html.append(
+            f'<div style="color:{_UI_FG_MUTED};font-size:12px;">'
+            'No taxonomy fields available for this dataset.</div>'
+        )
 
     lineage_line = (
-        "<div style=\"margin-top:4px;\"><strong>MRCA lineage:</strong> "
-        f"<span style=\"overflow-wrap:anywhere;\">{escape(shared_lineage)}</span></div>"
+        f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
+        'text-transform:uppercase;margin-top:8px;">Shared lineage</dt>'
+        f'<dd style="margin:2px 0 0;font-family:{_UI_FONT_MONO};font-size:11.5px;'
+        'line-height:1.45;overflow-wrap:anywhere;">'
+        f'{escape(shared_lineage)}</dd>'
         if shared_lineage
         else ""
     )
     return (
-        "<div style=\"box-sizing:border-box;width:100%;padding:14px 16px;"
-        "border:1px solid #d7d0c3;background:#fbfaf7;color:#25231f;font-family:Arial,sans-serif;\">"
-        "<div style=\"font-size:15px;font-weight:700;margin-bottom:8px;\">Exploration Summary</div>"
-        f"<div><strong>Scope:</strong> All points ({total})</div>"
-        f"<div><strong>Shared ancestor:</strong> {escape(shared_label)}</div>"
-        f"{lineage_line}"
-        f"<div><strong>Most common:</strong> {escape(top_label)} ({top_count})</div>"
-        f"<div style=\"margin-top:10px;font-weight:700;font-size:13px;\">{escape(composition_label)}</div>"
-        f"{''.join(bar_html)}"
+        f'<div style="box-sizing:border-box;width:100%;padding:14px 16px;'
+        f'border:1px solid {_UI_BORDER};background:{_UI_BG_SOFT};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};">'
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">'
+        f'<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">Exploration summary</span>'
+        f'<span style="font-family:{_UI_FONT_MONO};font-size:12px;color:{_UI_FG};">'
+        f'n = <strong>{total}</strong></span>'
+        '</div>'
+        '<dl style="margin:10px 0 0;padding:0;">'
+        f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
+        'text-transform:uppercase;">Scope</dt>'
+        f'<dd style="margin:2px 0 0;font-size:13px;">All points</dd>'
+        f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
+        'text-transform:uppercase;margin-top:8px;">MRCA</dt>'
+        f'<dd style="margin:2px 0 0;font-size:14px;font-weight:600;">{escape(shared_label)}</dd>'
+        f'{lineage_line}'
+        '</dl>'
+        f'<div style="margin-top:12px;font-size:10.5px;font-weight:700;letter-spacing:.08em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">{escape(composition_label)}</div>'
+        f'<div style="margin-top:4px;">{"".join(bar_html)}</div>'
         "</div>"
     )
 
 
-def _selection_status_html(scope, shown, total):
+def _selection_status_html(scope, shown, total, active_scope_key="all"):
     """Return the compact active-state banner shown above the plot controls."""
     pct = (shown / total * 100.0) if total else 0.0
     return (
-        "<div style=\"box-sizing:border-box;width:100%;padding:10px 12px;"
-        "border:1px solid #c8d6d2;background:#eef7f4;color:#1f3935;"
-        "font-family:Arial,sans-serif;font-size:13px;\">"
-        f"<strong>Active view:</strong> {html.escape(str(scope), quote=True)} "
-        f"<span style=\"color:#46615c;\">({shown} of {total} samples, {pct:.1f}%)</span>"
-        "</div>"
+        f'<div class="egt-status" style="box-sizing:border-box;width:100%;padding:10px 14px;'
+        f'border:1px solid {_UI_RULE};background:{_UI_BG_RAISED};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};font-size:13px;display:flex;align-items:center;'
+        'flex-wrap:wrap;row-gap:6px;column-gap:10px;">'
+        '<span style="display:inline-flex;align-items:baseline;gap:8px;">'
+        f'<span style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;'
+        f'color:{_UI_FG_MUTED};font-weight:700;">Active view</span>'
+        f'<span style="font-weight:600;">{html.escape(str(scope), quote=True)}</span>'
+        '</span>'
+        f'<span style="font-family:{_UI_FONT_MONO};font-size:11.5px;color:{_UI_FG_MUTED};">'
+        f'{shown} / {total} · {pct:.1f}%</span>'
+        f'{_scope_switcher_html(active_scope_key)}'
+        '</div>'
     )
 
 
@@ -1769,34 +1852,62 @@ def _plot_header_html(plot_title, analysis_type, total):
     title = html.escape(str(plot_title), quote=True)
     analysis = html.escape(str(analysis_type or ""), quote=True)
     return (
-        "<div style=\"box-sizing:border-box;width:100%;padding:14px 18px;"
-        "border-bottom:1px solid #d8d4cc;background:#ffffff;color:#24211d;"
-        "font-family:Arial,sans-serif;display:flex;align-items:center;"
-        "justify-content:space-between;gap:18px;\">"
-        "<div style=\"min-width:0;\">"
-        f"<div style=\"font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">{title}</div>"
-        "<div style=\"font-size:12px;color:#625e55;margin-top:3px;\">"
-        f"{analysis} interactive projection &middot; {total} samples"
-        "</div>"
-        "</div>"
-        "<div style=\"font-size:12px;color:#625e55;text-align:right;white-space:nowrap;\">"
-        "Search, lasso, table selection, and export stay linked."
-        "</div>"
-        "</div>"
+        f'<div class="egt-header" style="box-sizing:border-box;width:100%;padding:14px 20px;'
+        f'border-bottom:1px solid {_UI_BORDER};background:{_UI_BG_RAISED};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};display:flex;align-items:center;'
+        'justify-content:space-between;gap:18px;flex-wrap:wrap;">'
+        '<div style="min-width:0;flex:1 1 320px;">'
+        f'<div style="font-size:11px;font-weight:700;letter-spacing:.14em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">{analysis} projection</div>'
+        '<div style="font-size:18px;font-weight:700;line-height:1.25;margin-top:2px;'
+        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{title}</div>'
+        f'<div style="font-family:{_UI_FONT_MONO};font-size:11.5px;color:{_UI_FG_MUTED};'
+        f'margin-top:3px;">{total} samples</div>'
+        '</div>'
+        '<div style="display:inline-flex;gap:8px;align-items:center;flex:0 0 auto;">'
+        f'<button type="button" data-action="reset-all" '
+        f'style="all:unset;cursor:pointer;padding:6px 12px;border:1px solid {_UI_RULE};'
+        f'border-radius:4px;font-family:{_UI_FONT_SANS};font-size:12px;font-weight:600;'
+        f'color:{_UI_FG};background:{_UI_BG_SOFT};">Reset view</button>'
+        f'<button type="button" data-action="toggle-help" aria-label="Keyboard shortcuts" '
+        f'style="all:unset;cursor:pointer;width:28px;height:28px;line-height:28px;'
+        f'text-align:center;border:1px solid {_UI_RULE};border-radius:50%;'
+        f'font-family:{_UI_FONT_SANS};font-size:13px;font-weight:700;color:{_UI_FG};'
+        f'background:{_UI_BG_SOFT};">?</button>'
+        '</div>'
+        '<div data-egt-help="panel" style="display:none;flex-basis:100%;margin-top:10px;'
+        f'padding:12px 14px;border:1px dashed {_UI_RULE};background:{_UI_BG_SOFT};'
+        f'font-size:12px;line-height:1.55;color:{_UI_FG};">'
+        '<div style="font-weight:700;margin-bottom:4px;">Shortcuts &amp; scopes</div>'
+        f'<div><kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
+        f'border-radius:3px;background:{_UI_BG_RAISED};">/</kbd> focus taxid search &nbsp;·&nbsp; '
+        f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
+        f'border-radius:3px;background:{_UI_BG_RAISED};">Esc</kbd> clear selection &nbsp;·&nbsp; '
+        f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
+        f'border-radius:3px;background:{_UI_BG_RAISED};">E</kbd> export</div>'
+        '<div style="margin-top:6px;color:' + _UI_FG_MUTED + ';">'
+        'Scopes: <b>All</b> (every sample) · <b>Filtered</b> (search matches) · '
+        '<b>Lasso</b> (drag box/lasso on the plot) · <b>Table</b> (rows you pick in the table). '
+        'Export uses the active scope.'
+        '</div>'
+        '</div>'
+        '</div>'
     )
 
 
 def _panel_section_html(title, subtitle=""):
     """Return a small section label for the dashboard side panel."""
     subtitle_html = (
-        f"<div style=\"font-size:11px;color:#6f6a5f;margin-top:2px;\">{html.escape(str(subtitle), quote=True)}</div>"
+        f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin-top:2px;">'
+        f'{html.escape(str(subtitle), quote=True)}</div>'
         if subtitle
         else ""
     )
     return (
-        "<div style=\"box-sizing:border-box;width:100%;padding:10px 0 4px;"
-        "font-family:Arial,sans-serif;color:#25231f;\">"
-        f"<div style=\"font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;\">{html.escape(str(title), quote=True)}</div>"
+        f'<div style="box-sizing:border-box;width:100%;padding:12px 0 6px;'
+        f'font-family:{_UI_FONT_SANS};color:{_UI_FG};border-bottom:1px solid {_UI_BORDER_SOFT};">'
+        f'<div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;'
+        f'text-transform:uppercase;color:{_UI_FG};">{html.escape(str(title), quote=True)}</div>'
         f"{subtitle_html}"
         "</div>"
     )
@@ -1902,7 +2013,13 @@ def _add_color_group_labels(plot_data, palette_path=None):
 
 
 def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
-    """Return a collapsible legend summarizing the active color palette."""
+    """Return an interactive legend summarizing the active color palette.
+
+    Chips carry a ``data-legend-color`` attribute so the global click
+    delegator in _taxonomy_summary_js can re-select that color group on
+    the plot. Copy buttons carry ``data-copy-color`` to emit the samples
+    of that group as a newline-separated list to the clipboard.
+    """
     if "original_color" not in plot_data.columns:
         return ""
 
@@ -1922,28 +2039,42 @@ def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
         safe_color = html.escape(color, quote=True)
         safe_label = html.escape(label, quote=True)
         items.append(
-            "<div style=\"display:grid;grid-template-columns:18px 1fr auto;align-items:center;"
-            "gap:8px;margin:6px 0;font-size:12px;\">"
-            f"<span style=\"width:14px;height:14px;border-radius:3px;background:{safe_color};"
-            "border:1px solid rgba(0,0,0,.18);display:inline-block;\"></span>"
-            f"<span style=\"overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{safe_label}</span>"
-            f"<span style=\"color:#6f6a5f;\">{count} ({pct:.1f}%)</span>"
-            "</div>"
+            f'<div class="egt-legend-chip" data-legend-color="{safe_color}" '
+            f'role="button" tabindex="0" title="Click to select this color group"'
+            'style="display:grid;grid-template-columns:16px 1fr auto 22px;'
+            'align-items:center;column-gap:8px;padding:5px 6px;margin:2px -6px;'
+            f'border-radius:4px;cursor:pointer;font-size:12px;">'
+            f'<span style="width:12px;height:12px;border-radius:2px;background:{safe_color};'
+            'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>'
+            f'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{safe_label}</span>'
+            f'<span style="font-family:{_UI_FONT_MONO};font-size:11px;color:{_UI_FG_MUTED};">'
+            f'{count} · {pct:.1f}%</span>'
+            f'<button type="button" data-copy-color="{safe_color}" '
+            'title="Copy sample names in this group" '
+            f'style="all:unset;cursor:copy;width:20px;height:20px;line-height:20px;'
+            f'text-align:center;border-radius:3px;color:{_UI_FG_MUTED};font-size:13px;">⎘</button>'
+            '</div>'
         )
 
     omitted_html = (
-        f"<div style=\"font-size:11px;color:#6f6a5f;margin-top:8px;\">+ {omitted} additional color groups not shown in this compact legend.</div>"
+        f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin-top:8px;">'
+        f'+ {omitted} more color groups (not shown)</div>'
         if omitted
         else ""
     )
 
     return (
-        "<div style=\"box-sizing:border-box;width:100%;padding:12px 14px;"
-        "border:1px solid #d7d0c3;background:#fffdf8;color:#25231f;font-family:Arial,sans-serif;\">"
-        "<div style=\"font-size:13px;font-weight:700;\">Color Legend</div>"
-        "<div style=\"font-size:11px;color:#6f6a5f;margin:6px 0 10px;\">"
-        f"{html.escape(str(scope_label), quote=True)}: top {len(visible_rows)} of {len(rows)} color groups by sample count."
-        "</div>"
+        f'<div class="egt-legend" style="box-sizing:border-box;width:100%;padding:12px 14px;'
+        f'border:1px solid {_UI_BORDER};background:{_UI_BG_SOFT};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};">'
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">'
+        f'<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">Color legend</span>'
+        f'<span style="font-family:{_UI_FONT_MONO};font-size:11px;color:{_UI_FG_MUTED};">'
+        f'{len(visible_rows)} / {len(rows)} groups</span>'
+        '</div>'
+        f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin:4px 0 8px;">'
+        f'{html.escape(str(scope_label), quote=True)} · click a group to select it</div>'
         f"{''.join(items)}"
         f"{omitted_html}"
         "</div>"
@@ -1951,8 +2082,42 @@ def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
 
 
 def _taxonomy_summary_js():
-    """Return a CustomJS helper that renders the lasso/search composition panel."""
-    return r"""
+    """Return a CustomJS helper that renders the lasso/search composition panel.
+
+    In addition to rerendering summary_div, status_div, and legend_div,
+    this helper installs a one-time delegated click listener on
+    ``document`` that handles interactive widgets embedded in those
+    divs (scope switcher, legend chips, copy buttons, header help
+    toggle, header reset). It reaches into Bokeh CustomJS args via
+    ``window._egtRefs`` which this function rebinds on every call.
+    """
+    theme_js = (
+        "var T = {"
+        f"fontSans: {json.dumps(_UI_FONT_SANS)},"
+        f"fontMono: {json.dumps(_UI_FONT_MONO)},"
+        f"bg: {json.dumps(_UI_BG)},"
+        f"bgSoft: {json.dumps(_UI_BG_SOFT)},"
+        f"bgRaised: {json.dumps(_UI_BG_RAISED)},"
+        f"border: {json.dumps(_UI_BORDER)},"
+        f"borderSoft: {json.dumps(_UI_BORDER_SOFT)},"
+        f"fg: {json.dumps(_UI_FG)},"
+        f"fgMuted: {json.dumps(_UI_FG_MUTED)},"
+        f"accent: {json.dumps(_UI_ACCENT)},"
+        f"accentSoft: {json.dumps(_UI_ACCENT_SOFT)},"
+        f"accentFg: {json.dumps(_UI_ACCENT_FG)},"
+        f"rule: {json.dumps(_UI_RULE)}"
+        "};"
+        f"var SCOPE_ORDER = {json.dumps(_SCOPE_KEYS)};"
+    )
+    return theme_js + r"""
+            function escapeHtml(value) {
+                return String(value === null || value === undefined ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
             function escapeHtml(value) {
                 return String(value === null || value === undefined ? '' : value)
                     .replace(/&/g, '&amp;')
@@ -2092,28 +2257,42 @@ def _taxonomy_summary_js():
                     var count = visible[r][1];
                     var label = visible[r][2];
                     var pct = total > 0 ? (count / total * 100.0) : 0.0;
-                    items += '<div style="display:grid;grid-template-columns:18px 1fr auto;align-items:center;' +
-                        'gap:8px;margin:6px 0;font-size:12px;">' +
-                        '<span style="width:14px;height:14px;border-radius:3px;background:' + escapeHtml(color) + ';' +
-                        'border:1px solid rgba(0,0,0,.18);display:inline-block;"></span>' +
+                    items +=
+                        '<div class="egt-legend-chip" data-legend-color="' + escapeHtml(color) + '"' +
+                        ' role="button" tabindex="0" title="Click to select this color group"' +
+                        ' style="display:grid;grid-template-columns:16px 1fr auto 22px;align-items:center;' +
+                        'column-gap:8px;padding:5px 6px;margin:2px -6px;border-radius:4px;cursor:pointer;' +
+                        'font-size:12px;">' +
+                        '<span style="width:12px;height:12px;border-radius:2px;background:' + escapeHtml(color) + ';' +
+                        'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>' +
                         '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
-                        '<span style="color:#6f6a5f;">' + count + ' (' + pct.toFixed(1) + '%)</span>' +
+                        '<span style="font-family:' + T.fontMono + ';font-size:11px;color:' + T.fgMuted + ';">' +
+                        count + ' · ' + pct.toFixed(1) + '%</span>' +
+                        '<button type="button" data-copy-color="' + escapeHtml(color) + '"' +
+                        ' title="Copy sample names in this group"' +
+                        ' style="all:unset;cursor:copy;width:20px;height:20px;line-height:20px;' +
+                        'text-align:center;border-radius:3px;color:' + T.fgMuted + ';font-size:13px;">⎘</button>' +
                         '</div>';
                 }
                 if (items === '') {
-                    items = '<div style="color:#6f6a5f;font-size:12px;">No color groups available for this view.</div>';
+                    items = '<div style="color:' + T.fgMuted + ';font-size:12px;">No color groups available for this view.</div>';
                 }
                 var omittedHtml = omitted > 0
-                    ? '<div style="font-size:11px;color:#6f6a5f;margin-top:8px;">+ ' + omitted + ' additional color groups not shown in this compact legend.</div>'
+                    ? '<div style="font-size:11px;color:' + T.fgMuted + ';margin-top:8px;">+ ' + omitted + ' more color groups (not shown)</div>'
                     : '';
 
                 legend_div.text =
-                    '<div style="box-sizing:border-box;width:100%;padding:12px 14px;' +
-                    'border:1px solid #d7d0c3;background:#fffdf8;color:#25231f;font-family:Arial,sans-serif;">' +
-                    '<div style="font-size:13px;font-weight:700;">Color Legend</div>' +
-                    '<div style="font-size:11px;color:#6f6a5f;margin:6px 0 10px;">' +
-                    escapeHtml(scope || 'Active view') + ': top ' + visible.length + ' of ' + rows.length + ' color groups by sample count.' +
+                    '<div class="egt-legend" style="box-sizing:border-box;width:100%;padding:12px 14px;' +
+                    'border:1px solid ' + T.border + ';background:' + T.bgSoft + ';color:' + T.fg + ';' +
+                    'font-family:' + T.fontSans + ';">' +
+                    '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">' +
+                    '<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;' +
+                    'text-transform:uppercase;color:' + T.fgMuted + ';">Color legend</span>' +
+                    '<span style="font-family:' + T.fontMono + ';font-size:11px;color:' + T.fgMuted + ';">' +
+                    visible.length + ' / ' + rows.length + ' groups</span>' +
                     '</div>' +
+                    '<div style="font-size:11px;color:' + T.fgMuted + ';margin:4px 0 8px;">' +
+                    escapeHtml(scope || 'Active view') + ' · click a group to select it</div>' +
                     items +
                     omittedHtml +
                     '</div>';
@@ -2172,56 +2351,226 @@ def _taxonomy_summary_js():
                 var allCount = all_indices.length;
                 var pctShown = allCount > 0 ? (total / allCount * 100.0) : 0.0;
 
+                var sharedLineageDisplay = shared.join(' › ');
                 var bars = '';
                 if (entries.length === 0) {
-                    bars = '<div style="color:#6f6a5f;font-size:12px;">No taxonomy fields available for this dataset.</div>';
+                    bars = '<div style="color:' + T.fgMuted + ';font-size:12px;">No taxonomy fields available for this dataset.</div>';
                 }
                 for (var i = 0; i < entries.length; i++) {
                     var label = entries[i][0];
                     var count = entries[i][1];
                     var pct = total > 0 ? (count / total * 100.0) : 0.0;
-                    bars += '<div style="margin:7px 0;">' +
-                        '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;">' +
+                    bars +=
+                        '<div style="display:grid;grid-template-columns:1fr 64px 72px;' +
+                        'align-items:center;column-gap:10px;margin:5px 0;font-size:12px;">' +
                         '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
-                        '<span>' + count + ' (' + pct.toFixed(1) + '%)</span>' +
-                        '</div>' +
-                        '<div style="height:8px;background:#e8e6df;border-radius:4px;overflow:hidden;">' +
-                        '<div style="height:8px;width:' + pct.toFixed(1) + '%;background:#376f6b;"></div>' +
-                        '</div>' +
-                        '</div>';
+                        '<span style="font-family:' + T.fontMono + ';font-size:11px;color:' + T.fgMuted + ';' +
+                        'text-align:right;">' + count + '&nbsp;·&nbsp;' + pct.toFixed(1) + '%</span>' +
+                        '<span style="height:6px;background:' + T.borderSoft + ';border-radius:3px;overflow:hidden;">' +
+                        '<span style="display:block;height:6px;width:' + pct.toFixed(1) + '%;background:' + T.accent + ';"></span>' +
+                        '</span></div>';
+                }
+
+                var lineageBlock = '';
+                if (sharedLineageDisplay) {
+                    lineageBlock =
+                        '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
+                        'text-transform:uppercase;margin-top:8px;">Shared lineage</dt>' +
+                        '<dd style="margin:2px 0 0;font-family:' + T.fontMono + ';font-size:11.5px;' +
+                        'line-height:1.45;overflow-wrap:anywhere;">' + escapeHtml(sharedLineageDisplay) + '</dd>';
                 }
 
                 if (typeof summary_div !== 'undefined' && summary_div) {
                     summary_div.text =
                         '<div style="box-sizing:border-box;width:100%;padding:14px 16px;' +
-                        'border:1px solid #d7d0c3;background:#fbfaf7;color:#25231f;font-family:Arial,sans-serif;">' +
-                        '<div style="font-size:15px;font-weight:700;margin-bottom:8px;">Exploration Summary</div>' +
-                        '<div><strong>Scope:</strong> ' + escapeHtml(scope) + ' (' + total + ')</div>' +
-                        '<div><strong>Shared ancestor:</strong> ' + escapeHtml(sharedLabel) + '</div>' +
-                        (sharedLineage ? '<div style="margin-top:4px;"><strong>MRCA lineage:</strong> <span style="overflow-wrap:anywhere;">' + escapeHtml(sharedLineage) + '</span></div>' : '') +
-                        '<div><strong>Most common:</strong> ' + escapeHtml(topLabel) + ' (' + topCount + ')</div>' +
-                        '<div style="margin-top:10px;font-weight:700;font-size:13px;">' + escapeHtml(compositionLabel) + '</div>' +
-                        bars +
+                        'border:1px solid ' + T.border + ';background:' + T.bgSoft + ';color:' + T.fg + ';' +
+                        'font-family:' + T.fontSans + ';">' +
+                        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">' +
+                        '<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;' +
+                        'text-transform:uppercase;color:' + T.fgMuted + ';">Exploration summary</span>' +
+                        '<span style="font-family:' + T.fontMono + ';font-size:12px;color:' + T.fg + ';">' +
+                        'n = <strong>' + total + '</strong></span>' +
+                        '</div>' +
+                        '<dl style="margin:10px 0 0;padding:0;">' +
+                        '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
+                        'text-transform:uppercase;">Scope</dt>' +
+                        '<dd style="margin:2px 0 0;font-size:13px;">' + escapeHtml(scope) + '</dd>' +
+                        '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
+                        'text-transform:uppercase;margin-top:8px;">MRCA</dt>' +
+                        '<dd style="margin:2px 0 0;font-size:14px;font-weight:600;">' + escapeHtml(sharedLabel) + '</dd>' +
+                        lineageBlock +
+                        '</dl>' +
+                        '<div style="margin-top:12px;font-size:10.5px;font-weight:700;letter-spacing:.08em;' +
+                        'text-transform:uppercase;color:' + T.fgMuted + ';">' + escapeHtml(compositionLabel) + '</div>' +
+                        '<div style="margin-top:4px;">' + bars + '</div>' +
                         '</div>';
+                }
+
+                var scopeKey = exportStateKey(scope);
+                var scopeButtons = '';
+                for (var si = 0; si < SCOPE_ORDER.length; si++) {
+                    var sKey = SCOPE_ORDER[si][0];
+                    var sLabel = SCOPE_ORDER[si][1];
+                    var active = sKey === scopeKey;
+                    scopeButtons +=
+                        '<button type="button" data-scope-key="' + sKey + '"' +
+                        ' class="egt-scope-btn' + (active ? ' active' : '') + '"' +
+                        ' style="all:unset;cursor:pointer;padding:3px 10px;border-radius:999px;' +
+                        'border:1px solid ' + (active ? T.accent : T.rule) + ';' +
+                        'background:' + (active ? T.accent : 'transparent') + ';' +
+                        'color:' + (active ? '#ffffff' : T.accentFg) + ';' +
+                        'font-family:' + T.fontSans + ';font-size:11px;font-weight:600;' +
+                        'letter-spacing:.03em;">' + escapeHtml(sLabel) + '</button>';
                 }
 
                 if (typeof status_div !== 'undefined' && status_div) {
                     status_div.text =
-                        '<div style="box-sizing:border-box;width:100%;padding:10px 12px;' +
-                        'border:1px solid #c8d6d2;background:#eef7f4;color:#1f3935;' +
-                        'font-family:Arial,sans-serif;font-size:13px;">' +
-                        '<strong>Active view:</strong> ' + escapeHtml(scope) + ' ' +
-                        '<span style="color:#46615c;">(' + total + ' of ' + allCount + ' samples, ' + pctShown.toFixed(1) + '%)</span>' +
+                        '<div class="egt-status" style="box-sizing:border-box;width:100%;padding:10px 14px;' +
+                        'border:1px solid ' + T.rule + ';background:' + T.bgRaised + ';color:' + T.fg + ';' +
+                        'font-family:' + T.fontSans + ';font-size:13px;display:flex;align-items:center;' +
+                        'flex-wrap:wrap;row-gap:6px;column-gap:10px;">' +
+                        '<span style="display:inline-flex;align-items:baseline;gap:8px;">' +
+                        '<span style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;' +
+                        'color:' + T.fgMuted + ';font-weight:700;">Active view</span>' +
+                        '<span style="font-weight:600;">' + escapeHtml(scope) + '</span>' +
+                        '</span>' +
+                        '<span style="font-family:' + T.fontMono + ';font-size:11.5px;color:' + T.fgMuted + ';">' +
+                        total + ' / ' + allCount + ' · ' + pctShown.toFixed(1) + '%</span>' +
+                        '<span class="egt-scope-switcher" style="display:inline-flex;gap:6px;' +
+                        'margin-left:12px;vertical-align:middle;">' + scopeButtons + '</span>' +
                         '</div>';
                 }
 
                 if (typeof export_state !== 'undefined' && export_state) {
-                    export_state.data['state'] = [exportStateKey(scope)];
+                    export_state.data['state'] = [scopeKey];
                     export_state.data['rows'] = [total];
                     export_state.change.emit();
                 }
 
                 renderColorLegend(indices, scope);
+            }
+
+            // Expose references so the delegated click handler can reach
+            // sources, widgets, and tree helpers regardless of which
+            // CustomJS fired last.
+            if (typeof window !== 'undefined') {
+                window._egtRefs = window._egtRefs || {};
+                try { window._egtRefs.source = source; } catch (e) {}
+                try { window._egtRefs.filtered_source = filtered_source; } catch (e) {}
+                try { window._egtRefs.summary_div = summary_div; } catch (e) {}
+                try { window._egtRefs.status_div = status_div; } catch (e) {}
+                try { window._egtRefs.legend_div = legend_div; } catch (e) {}
+                try { window._egtRefs.export_state = export_state; } catch (e) {}
+                try { window._egtRefs.tree_source = tree_source; } catch (e) {}
+                try { window._egtRefs.tree_node_source = tree_node_source; } catch (e) {}
+                try { window._egtRefs.tree_leaf_source = tree_leaf_source; } catch (e) {}
+
+                if (!window._egtDelegatorInstalled) {
+                    window._egtDelegatorInstalled = true;
+                    document.addEventListener('click', function(ev) {
+                        var refs = window._egtRefs || {};
+                        var target = ev.target;
+                        if (!target) return;
+
+                        var helpBtn = target.closest && target.closest('[data-action="toggle-help"]');
+                        if (helpBtn) {
+                            var panel = document.querySelector('[data-egt-help="panel"]');
+                            if (panel) {
+                                panel.style.display = (panel.style.display === 'none' || panel.style.display === '') ? 'block' : 'none';
+                            }
+                            ev.preventDefault();
+                            return;
+                        }
+
+                        var resetBtn = target.closest && target.closest('[data-action="reset-all"]');
+                        if (resetBtn) {
+                            if (refs.source) {
+                                var data = refs.source.data;
+                                var colors = data['color'];
+                                var sizes = data['size'];
+                                var alphas = data['alpha'];
+                                var originals = data['original_color'];
+                                for (var i = 0; i < colors.length; i++) {
+                                    colors[i] = originals[i];
+                                    sizes[i] = 4;
+                                    alphas[i] = 0.8;
+                                }
+                                refs.source.selected.indices = [];
+                                refs.source.change.emit();
+                            }
+                            if (refs.filtered_source) {
+                                var fd = refs.filtered_source.data;
+                                for (var k in fd) { fd[k] = []; }
+                                if (refs.source) {
+                                    var sd = refs.source.data;
+                                    var n = sd['UMAP1'] ? sd['UMAP1'].length : 0;
+                                    for (var i = 0; i < n; i++) {
+                                        for (var k in fd) { fd[k].push(sd[k][i]); }
+                                    }
+                                }
+                                refs.filtered_source.selected.indices = [];
+                                refs.filtered_source.change.emit();
+                            }
+                            ev.preventDefault();
+                            return;
+                        }
+
+                        var scopeBtn = target.closest && target.closest('[data-scope-key]');
+                        if (scopeBtn && refs.export_state) {
+                            var newKey = scopeBtn.getAttribute('data-scope-key');
+                            refs.export_state.data['state'] = [newKey];
+                            // Visual-only toggle; export reads export_state.
+                            var btns = document.querySelectorAll('[data-scope-key]');
+                            for (var b = 0; b < btns.length; b++) {
+                                var active = btns[b].getAttribute('data-scope-key') === newKey;
+                                btns[b].style.background = active ? '""" + _UI_ACCENT + """' : 'transparent';
+                                btns[b].style.color = active ? '#ffffff' : '""" + _UI_ACCENT_FG + """';
+                                btns[b].style.borderColor = active ? '""" + _UI_ACCENT + """' : '""" + _UI_RULE + """';
+                            }
+                            refs.export_state.change.emit();
+                            ev.preventDefault();
+                            return;
+                        }
+
+                        var copyBtn = target.closest && target.closest('[data-copy-color]');
+                        if (copyBtn && refs.source) {
+                            ev.stopPropagation();
+                            var wantColor = copyBtn.getAttribute('data-copy-color');
+                            var sd = refs.source.data;
+                            var origs = sd['original_color'] || [];
+                            var samples = sd['sample'] || sd['taxname'] || [];
+                            var names = [];
+                            for (var i = 0; i < origs.length; i++) {
+                                if (String(origs[i]) === wantColor && samples[i] !== undefined) {
+                                    names.push(String(samples[i]));
+                                }
+                            }
+                            var text = names.join('\n');
+                            if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(text);
+                            }
+                            copyBtn.textContent = '✓';
+                            setTimeout(function() { copyBtn.textContent = '⎘'; }, 900);
+                            ev.preventDefault();
+                            return;
+                        }
+
+                        var chip = target.closest && target.closest('[data-legend-color]');
+                        if (chip && refs.source) {
+                            var wantColor = chip.getAttribute('data-legend-color');
+                            var sd = refs.source.data;
+                            var origs = sd['original_color'];
+                            var picked = [];
+                            for (var i = 0; i < origs.length; i++) {
+                                if (String(origs[i]) === wantColor) picked.push(i);
+                            }
+                            refs.source.selected.indices = picked;
+                            refs.source.change.emit();
+                            ev.preventDefault();
+                            return;
+                        }
+                    }, false);
+                }
             }
     """
 
@@ -2561,6 +2910,24 @@ def mgt_mlt_plot_HTML(
         linked_tree_plot.min_border_right = 16
         linked_tree_plot.min_border_top = 4
         linked_tree_plot.min_border_bottom = 0
+
+        # Add a near-invisible leaf-hover layer so hovering near a tip reveals
+        # its taxname without stealing vertical pixels from the 145 px tree.
+        leaf_glyph = linked_tree_plot.scatter(
+            x="x",
+            y=0,
+            source=linked_tree_leaf_source,
+            size=10,
+            color="#000000",
+            alpha=0.0,
+            line_color=None,
+        )
+        leaf_hover = bokeh.models.HoverTool(
+            tooltips=[("Taxon", "@taxname"), ("Taxid", "@taxid")],
+            renderers=[leaf_glyph],
+            mode="mouse",
+        )
+        linked_tree_plot.add_tools(leaf_hover)
 
     # Add scatter plot
     scatter = plot.scatter(
@@ -3226,48 +3593,50 @@ def mgt_mlt_plot_HTML(
             disabled=not has_rank_options,
             width=side_input_width,
         )
-        update_button = bokeh.models.Button(label="Update Plot", button_type="success", width=side_button_width)
-        
-        # Button to export the current table dataset
-        export_button = bokeh.models.Button(label="Export Data", button_type="success", width=side_button_width)
-        clear_button = bokeh.models.Button(label="Clear", button_type="warning", width=72)
+        update_button = bokeh.models.Button(label="Apply search", button_type="success", width=side_button_width)
 
-        # Create table columns for MGT
+        # Export and Clear get clearer names now that a Reset-view button exists too.
+        export_button = bokeh.models.Button(label="Export", button_type="success", width=side_button_width)
+        clear_button = bokeh.models.Button(label="Clear selection", button_type="warning", width=110)
+        reset_view_button = bokeh.models.Button(label="Reset view", button_type="default", width=90)
+        if linked_tree_plot is not None:
+            tree_toggle = bokeh.models.Button(label="Hide tree", button_type="default", width=90)
+        else:
+            tree_toggle = None
+
+        # Create table columns for MGT. Column order is tuned for the dominant
+        # reviewer workflow (identify the sample, then read clade/taxid) and the
+        # color swatch is demoted to a thin row marker instead of its own column.
         mgt_columns = [
-            bokeh.models.TableColumn(field="sample", title="Sample", width=150),
-            bokeh.models.TableColumn(field="taxid", title="Taxid", width=80),
-            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=1),
-            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=1),
             bokeh.models.TableColumn(
-                field="original_color", title="Color",
+                field="sample",
+                title="Sample",
+                width=160,
                 formatter=bokeh.models.HTMLTemplateFormatter(template="""
-                    <span style="background-color:<%= original_color %>;
-                                color:<%= text_color %>;
-                                display:inline-block;
-                                width:auto;
-                                min-width:60px;
-                                text-align:center;
-                                padding:2px 5px;">
-                        <%= original_color %>
-                    </span>
+                    <span style="display:inline-block;padding:0 0 0 8px;
+                                 border-left:4px solid <%= original_color %>;"><%= sample %></span>
                 """),
-                width=75
-            )
+            ),
+            bokeh.models.TableColumn(field="taxid", title="Taxid", width=72),
+            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=70),
+            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=70),
         ]
-        
-        # Add taxname column if it exists
+        if "color_group_label" in plot_data.columns:
+            mgt_columns.insert(1, bokeh.models.TableColumn(field="color_group_label", title="Clade", width=150))
         if "taxname" in plot_data.columns:
-            mgt_columns.insert(2, bokeh.models.TableColumn(field="taxname", title="Taxname", width=200))
+            mgt_columns.insert(1, bokeh.models.TableColumn(field="taxname", title="Taxname", width=180))
 
-        # Create DataTable
-        # Enable row selection: click anywhere on row to select, Shift+click for range, Ctrl/Cmd+click for multiple
+        # Create DataTable. Default height is tighter than before so the
+        # table no longer dominates the panel; the "Rows" tab acts as the
+        # expandable drill-down view.
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=mgt_columns,
-            width=side_panel_width, height=360,
-            editable=False,  # Disable editing to avoid conflicts
-            selectable=True,  # Enable row selection by clicking on the row
-            sizing_mode="stretch_width"
+            width=side_panel_width, height=340,
+            editable=False,
+            selectable=True,
+            sizing_mode="stretch_width",
+            index_position=None,
         )
         
         # Add a callback to highlight table-selected rows in red on the plot
@@ -3607,62 +3976,83 @@ def mgt_mlt_plot_HTML(
         source.selected.js_on_change("indices", lasso_callback)
 
         # Export Button Callback with filename prompt
-        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source, export_state=export_state), code="""
-            var table_has_rows = filtered_source.data['sample'].length > 0;
-            var active_data = table_has_rows ? filtered_source.data : source.data;
+        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source, export_state=export_state), code=r"""
+            // Export honors the active scope chosen via the scope switcher.
+            // 'all'              -> every sample from source
+            // 'search_results'   -> everything currently in filtered_source
+            // 'lasso_selection'  -> source indices selected on the plot
+            // 'table_selection'  -> filtered_source rows the user picked
+            var scope = (export_state && export_state.data['state'] && export_state.data['state'][0]) || 'all';
+            var source_data = source.data;
+            var filtered_data = filtered_source.data;
+
+            var active_data = source_data;
+            var row_indices = [];
+
+            if (scope === 'table_selection') {
+                active_data = filtered_data;
+                row_indices = filtered_source.selected.indices.slice();
+                if (row_indices.length === 0) {
+                    scope = 'search_results';
+                }
+            }
+            if (scope === 'search_results') {
+                active_data = filtered_data;
+                var n = active_data['sample'] ? active_data['sample'].length : 0;
+                row_indices = Array.from({length: n}, function(_, i) { return i; });
+                if (n === 0) {
+                    scope = 'all';
+                }
+            }
+            if (scope === 'lasso_selection') {
+                active_data = source_data;
+                row_indices = source.selected.indices.slice();
+                if (row_indices.length === 0) {
+                    scope = 'all';
+                }
+            }
+            if (scope === 'all') {
+                active_data = source_data;
+                var n = source_data['sample'] ? source_data['sample'].length : 0;
+                row_indices = Array.from({length: n}, function(_, i) { return i; });
+            }
+
+            var default_filename = 'umap_' + scope + '_' + row_indices.length + '.tsv';
+            var user_filename = prompt(
+                'Export scope: ' + scope + ' (' + row_indices.length + ' rows)\nFilename:',
+                default_filename
+            );
+            if (user_filename === null || user_filename.trim() === '') return;
+            if (!user_filename.endsWith('.tsv')) user_filename += '.tsv';
+
             var keys = Object.keys(active_data);
-            var source_rows = source.data['sample'].length;
-            var visible_rows = active_data[keys[0]].length;
-            var selected_rows = table_has_rows ? filtered_source.selected.indices.slice() : [];
-            var row_indices = selected_rows.length > 0
-                ? selected_rows
-                : Array.from({length: visible_rows}, function(_, i) { return i; });
+            var filtered_keys = keys.filter(function(k) {
+                return !k.includes('Unnamed') && k !== '_row_id' && k !== 'size'
+                    && k !== 'color' && k !== 'alpha' && k !== 'base_size'
+                    && k !== 'base_alpha' && k !== 'taxstring_tooltip'
+                    && k !== 'text_color';
+            });
+            var renamed_keys = filtered_keys.map(function(k) { return k === 'original_color' ? 'color' : k; });
 
-            // Prompt user for filename
-            var state = export_state.data['state'][0] || 'all';
-            if (selected_rows.length > 0) {
-                state = 'table_selection';
-            } else if (!table_has_rows || visible_rows === source_rows) {
-                state = 'all';
-            }
-            var default_filename = 'umap_' + state + '_' + row_indices.length + '.tsv';
-            var user_filename = prompt("Enter filename for export:", default_filename);
-            
-            // If user cancels, exit
-            if (user_filename === null || user_filename.trim() === "") {
-                return;
-            }
-            
-            // Ensure .tsv extension
-            if (!user_filename.endsWith(".tsv")) {
-                user_filename += ".tsv";
-            }
-
-            // Remove unwanted columns
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "_row_id" && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
-
-            // Rename "original_color" to "color"
-            var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
-
-            var csv_content = renamed_keys.join("\\t") + "\\n";
+            var csv_content = renamed_keys.join('\t') + '\n';
             for (var i = 0; i < row_indices.length; i++) {
                 var row_idx = row_indices[i];
                 var row = [];
                 for (var j = 0; j < filtered_keys.length; j++) {
                     row.push(active_data[filtered_keys[j]][row_idx]);
                 }
-                csv_content += row.join("\\t") + "\\n";
+                csv_content += row.join('\t') + '\n';
             }
 
             var blob = new Blob([csv_content], { type: 'text/plain' });
-            var a = document.createElement("a");
+            var a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = user_filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
         """)
-        
+
         export_button.js_on_event("button_click", export_callback)
 
         clear_callback_args = dict(
@@ -3722,22 +4112,61 @@ def mgt_mlt_plot_HTML(
             if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
                 row_kwargs["sizing_mode"] = "stretch_width"
 
+        # Wire Reset view button: resets zoom, sliders, grid.
+        reset_view_cb = bokeh.models.CustomJS(
+            args=dict(plot=plot, size_slider=size_slider, alpha_slider=alpha_slider, grid_button=grid_toggle),
+            code=r"""
+                // Reset UMAP zoom/pan
+                try { plot.reset.emit(); } catch (e) {}
+                size_slider.value = 4;
+                alpha_slider.value = 0.8;
+                plot.xgrid[0].visible = true;
+                plot.ygrid[0].visible = true;
+                grid_button.label = "Grid: On";
+            """,
+        )
+        reset_view_button.js_on_event("button_click", reset_view_cb)
+
+        if tree_toggle is not None:
+            tree_toggle_cb = bokeh.models.CustomJS(
+                args=dict(tree=linked_tree_plot, button=tree_toggle),
+                code=r"""
+                    var hidden = tree.visible === false;
+                    tree.visible = hidden;   // toggle
+                    button.label = tree.visible ? "Hide tree" : "Show tree";
+                """,
+            )
+            tree_toggle.js_on_event("button_click", tree_toggle_cb)
+
         control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
-        action_row = bokeh.layouts.row(update_button, clear_button, export_button, align="end", **row_kwargs)
+        primary_actions = [update_button, clear_button, reset_view_button, export_button]
+        if tree_toggle is not None:
+            primary_actions.append(tree_toggle)
+        action_row = bokeh.layouts.row(*primary_actions, align="end", **row_kwargs)
+
         left_children = [plot, control_row]
         if linked_tree_plot is not None:
             left_children.insert(0, linked_tree_plot)
         left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
+
+        # Tabs wrap the three readouts so they share vertical space instead
+        # of stacking and pushing the table below the fold.
+        readout_tabs = bokeh.models.Tabs(
+            tabs=[
+                bokeh.models.TabPanel(child=summary_div, title="Summary"),
+                bokeh.models.TabPanel(child=legend_div, title="Legend"),
+                bokeh.models.TabPanel(child=data_table, title="Rows"),
+            ],
+            sizing_mode="stretch_width",
+        )
+
         right_panel = bokeh.layouts.column(
             status_div,
-            summary_div,
             search_section_div,
             taxonomy_row,
             action_row,
-            legend_div,
-            table_section_div,
-            data_table,
+            readout_tabs,
             width=side_panel_width,
             sizing_mode="stretch_width",
         )
@@ -3751,7 +4180,58 @@ def mgt_mlt_plot_HTML(
     # Output to HTML
     bokeh.plotting.output_file(outhtml, title=plot_title, mode="inline")
     bokeh.io.save(layout)
-    
+
+    # Inject global stylesheet + keyboard shortcut handler. This runs for
+    # every HTML we emit (MGT and MLT), independent of the filtered-source
+    # auto-init below.
+    try:
+        with open(outhtml, 'r', encoding='utf-8') as f:
+            html_shell = f.read()
+        style_block = (
+            "<style id=\"egt-ui-style\">"
+            ".egt-legend-chip:hover{background:" + _UI_CHIP_HOVER + ";}"
+            ".egt-legend-chip:focus{outline:2px solid " + _UI_ACCENT + ";outline-offset:1px;}"
+            ".egt-scope-btn:hover{background:" + _UI_ACCENT_SOFT + " !important;}"
+            ".egt-scope-btn.active{background:" + _UI_ACCENT + " !important;color:#fff !important;}"
+            "@media (max-width: 1100px){"
+            ".bk-Row{flex-wrap:wrap !important;}"
+            ".bk-Row > .bk-Column{min-width:100% !important;}"
+            "}"
+            "</style>"
+        )
+        kb_script = (
+            "<script id=\"egt-keyboard\">(function(){"
+            "document.addEventListener('keydown', function(ev){"
+            "var tag=(ev.target && ev.target.tagName)||'';"
+            "if(tag==='INPUT'||tag==='TEXTAREA'){"
+            "if(ev.key==='Escape'){ev.target.blur();}return;"
+            "}"
+            "if(ev.key==='/'){"
+            "var inputs=document.querySelectorAll('input[type=\"text\"]');"
+            "for(var i=0;i<inputs.length;i++){"
+            "var ph=(inputs[i].placeholder||'').toLowerCase();"
+            "if(ph.indexOf('9606')!==-1||ph.indexOf('taxid')!==-1){"
+            "inputs[i].focus();ev.preventDefault();return;}}}"
+            "if(ev.key==='Escape'){"
+            "var refs=window._egtRefs||{};"
+            "if(refs.source){refs.source.selected.indices=[];refs.source.change.emit();}"
+            "if(refs.filtered_source){refs.filtered_source.selected.indices=[];refs.filtered_source.change.emit();}}"
+            "if(ev.key==='e'||ev.key==='E'){"
+            "var btns=document.querySelectorAll('button');"
+            "for(var i=0;i<btns.length;i++){"
+            "if((btns[i].textContent||'').trim()==='Export'){btns[i].click();ev.preventDefault();return;}}}"
+            "});})();</script>"
+        )
+        inject = style_block + kb_script
+        if "</body>" in html_shell:
+            html_shell = html_shell.replace("</body>", inject + "</body>", 1)
+        else:
+            html_shell += inject
+        with open(outhtml, 'w', encoding='utf-8') as f:
+            f.write(html_shell)
+    except OSError:
+        pass
+
     # Auto-populate the table on page load by injecting JavaScript into the HTML
     # This ensures the table is populated immediately without duplicating data in the HTML
     if filtered_source is not None and source_id and filtered_source_id:

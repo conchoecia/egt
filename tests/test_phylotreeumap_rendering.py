@@ -34,15 +34,16 @@ def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
     ptu.mgt_mlt_plot_HTML(str(umap_df), str(html_out), analysis_type="MGT", plot_sizing_mode="stretch_width")
     assert html_out.exists()
     html_text = html_out.read_text(encoding="utf-8")
-    assert "Exploration Summary" in html_text
+    assert "Exploration summary" in html_text
     assert "renderSelectionSummary" in html_text
     assert "_row_id" in html_text
-    assert '"label":"Clear"' in html_text
+    assert '"label":"Clear selection"' in html_text
     assert "Active view" in html_text
-    assert "Color Legend" in html_text
+    assert "Color legend" in html_text
     assert "search_results" in html_text
-    assert "interactive projection" in html_text
-    assert "Search, lasso, table selection, and export stay linked." in html_text
+    assert "projection" in html_text
+    # The UI now surfaces shortcuts/scopes instead of a static tagline.
+    assert "Shortcuts" in html_text
     assert "Linked tree enabled" not in html_text
     assert "UMAP only" not in html_text
     assert "https://cdn.bokeh.org" not in html_text
@@ -114,10 +115,10 @@ fallback:
     )
     html_text = linked_html.read_text(encoding="utf-8")
     assert "Linked tree enabled" not in html_text
-    assert "Exploration Summary" in html_text
-    assert '"label":"Clear"' in html_text
+    assert "Exploration summary" in html_text
+    assert '"label":"Clear selection"' in html_text
     assert "Active view" in html_text
-    assert "Color Legend" in html_text
+    assert "Color legend" in html_text
     assert "tree_node_source" in html_text or "horizontal_segment_index" in html_text
 
     mlt_html_df = tmp_path / "mlt_html.tsv"
@@ -133,9 +134,9 @@ fallback:
     ptu.mgt_mlt_plot_HTML(str(mlt_html_df), str(tmp_path / "mlt_plot.html"), analysis_type="MLT")
     assert (tmp_path / "mlt_plot.html").exists()
     mlt_html_text = (tmp_path / "mlt_plot.html").read_text(encoding="utf-8")
-    assert "Exploration Summary" in mlt_html_text
+    assert "Exploration summary" in mlt_html_text
     assert "Active view" in mlt_html_text
-    assert "Color Legend" in mlt_html_text
+    assert "Color legend" in mlt_html_text
     assert "UMAP only" not in mlt_html_text
 
     mlt_df = tmp_path / "mlt.df"
@@ -212,9 +213,10 @@ def test_taxonomy_summary_reports_mrca_lineage_without_level_columns():
 
     summary_html = ptu._taxonomy_summary_default_html(plot_data, "MGT")
 
-    assert "MRCA lineage" in summary_html
-    assert "root; cellular organisms; Eukaryota; Opisthokonta; Metazoa" in summary_html
-    assert "Shared ancestor:</strong> Metazoa" in summary_html
+    assert "Shared lineage" in summary_html
+    # Lineage separator changed from '; ' to ' › ' in the structured card.
+    assert "root › cellular organisms › Eukaryota › Opisthokonta › Metazoa" in summary_html
+    assert "Metazoa" in summary_html
     assert "Dominant distinguishing level" not in summary_html
     assert "Level 2:" not in summary_html
 
