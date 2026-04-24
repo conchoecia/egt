@@ -1655,13 +1655,15 @@ def _normalize_custom_taxonomy_columns(plot_data):
 # UI theme (shared between Python HTML templates and CustomJS string literals)
 # Keep in sync with _THEME_JS below.
 # ---------------------------------------------------------------------------
+# Font family names are quoted with single quotes so they don't collide with
+# the enclosing style="..." attribute. CSS accepts either quote style.
 _UI_FONT_SANS = (
-    '"Inter Tight", "Inter", ui-sans-serif, system-ui, -apple-system, '
-    '"Segoe UI", "Helvetica Neue", Arial, sans-serif'
+    "'Inter Tight', 'Inter', ui-sans-serif, system-ui, -apple-system, "
+    "'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
 )
 _UI_FONT_MONO = (
-    '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, '
-    '"Liberation Mono", monospace'
+    "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, "
+    "'Liberation Mono', monospace"
 )
 _UI_BG = "#f6f3ee"
 _UI_BG_SOFT = "#fbfaf7"
@@ -4193,10 +4195,9 @@ def mgt_mlt_plot_HTML(
             ".egt-legend-chip:focus{outline:2px solid " + _UI_ACCENT + ";outline-offset:1px;}"
             ".egt-scope-btn:hover{background:" + _UI_ACCENT_SOFT + " !important;}"
             ".egt-scope-btn.active{background:" + _UI_ACCENT + " !important;color:#fff !important;}"
-            "@media (max-width: 1100px){"
-            ".bk-Row{flex-wrap:wrap !important;}"
-            ".bk-Row > .bk-Column{min-width:100% !important;}"
-            "}"
+            # Deliberately NOT adding responsive overrides on .bk-Row / .bk-Column:
+            # those are Bokeh's internal layout classes and forcing widths there
+            # breaks match_aspect and stretches the plot horizontally.
             "</style>"
         )
         kb_script = (
