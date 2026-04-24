@@ -2111,15 +2111,7 @@ def _taxonomy_summary_js():
         "};"
         f"var SCOPE_ORDER = {json.dumps(_SCOPE_KEYS)};"
     )
-    return theme_js + r"""
-            function escapeHtml(value) {
-                return String(value === null || value === undefined ? '' : value)
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    .replace(/"/g, '&quot;')
-                    .replace(/'/g, '&#39;');
-            }
+    body = r"""
             function escapeHtml(value) {
                 return String(value === null || value === undefined ? '' : value)
                     .replace(/&/g, '&amp;')
@@ -2452,129 +2444,130 @@ def _taxonomy_summary_js():
                 renderColorLegend(indices, scope);
             }
 
-            // Expose references so the delegated click handler can reach
-            // sources, widgets, and tree helpers regardless of which
-            // CustomJS fired last.
-            if (typeof window !== 'undefined') {
-                window._egtRefs = window._egtRefs || {};
-                try { window._egtRefs.source = source; } catch (e) {}
-                try { window._egtRefs.filtered_source = filtered_source; } catch (e) {}
-                try { window._egtRefs.summary_div = summary_div; } catch (e) {}
-                try { window._egtRefs.status_div = status_div; } catch (e) {}
-                try { window._egtRefs.legend_div = legend_div; } catch (e) {}
-                try { window._egtRefs.export_state = export_state; } catch (e) {}
-                try { window._egtRefs.tree_source = tree_source; } catch (e) {}
-                try { window._egtRefs.tree_node_source = tree_node_source; } catch (e) {}
-                try { window._egtRefs.tree_leaf_source = tree_leaf_source; } catch (e) {}
-
-                if (!window._egtDelegatorInstalled) {
-                    window._egtDelegatorInstalled = true;
-                    document.addEventListener('click', function(ev) {
-                        var refs = window._egtRefs || {};
-                        var target = ev.target;
-                        if (!target) return;
-
-                        var helpBtn = target.closest && target.closest('[data-action="toggle-help"]');
-                        if (helpBtn) {
-                            var panel = document.querySelector('[data-egt-help="panel"]');
-                            if (panel) {
-                                panel.style.display = (panel.style.display === 'none' || panel.style.display === '') ? 'block' : 'none';
-                            }
-                            ev.preventDefault();
-                            return;
-                        }
-
-                        var resetBtn = target.closest && target.closest('[data-action="reset-all"]');
-                        if (resetBtn) {
-                            if (refs.source) {
-                                var data = refs.source.data;
-                                var colors = data['color'];
-                                var sizes = data['size'];
-                                var alphas = data['alpha'];
-                                var originals = data['original_color'];
-                                for (var i = 0; i < colors.length; i++) {
-                                    colors[i] = originals[i];
-                                    sizes[i] = 4;
-                                    alphas[i] = 0.8;
-                                }
-                                refs.source.selected.indices = [];
-                                refs.source.change.emit();
-                            }
-                            if (refs.filtered_source) {
-                                var fd = refs.filtered_source.data;
-                                for (var k in fd) { fd[k] = []; }
-                                if (refs.source) {
-                                    var sd = refs.source.data;
-                                    var n = sd['UMAP1'] ? sd['UMAP1'].length : 0;
-                                    for (var i = 0; i < n; i++) {
-                                        for (var k in fd) { fd[k].push(sd[k][i]); }
-                                    }
-                                }
-                                refs.filtered_source.selected.indices = [];
-                                refs.filtered_source.change.emit();
-                            }
-                            ev.preventDefault();
-                            return;
-                        }
-
-                        var scopeBtn = target.closest && target.closest('[data-scope-key]');
-                        if (scopeBtn && refs.export_state) {
-                            var newKey = scopeBtn.getAttribute('data-scope-key');
-                            refs.export_state.data['state'] = [newKey];
-                            // Visual-only toggle; export reads export_state.
-                            var btns = document.querySelectorAll('[data-scope-key]');
-                            for (var b = 0; b < btns.length; b++) {
-                                var active = btns[b].getAttribute('data-scope-key') === newKey;
-                                btns[b].style.background = active ? '""" + _UI_ACCENT + """' : 'transparent';
-                                btns[b].style.color = active ? '#ffffff' : '""" + _UI_ACCENT_FG + """';
-                                btns[b].style.borderColor = active ? '""" + _UI_ACCENT + """' : '""" + _UI_RULE + """';
-                            }
-                            refs.export_state.change.emit();
-                            ev.preventDefault();
-                            return;
-                        }
-
-                        var copyBtn = target.closest && target.closest('[data-copy-color]');
-                        if (copyBtn && refs.source) {
-                            ev.stopPropagation();
-                            var wantColor = copyBtn.getAttribute('data-copy-color');
-                            var sd = refs.source.data;
-                            var origs = sd['original_color'] || [];
-                            var samples = sd['sample'] || sd['taxname'] || [];
-                            var names = [];
-                            for (var i = 0; i < origs.length; i++) {
-                                if (String(origs[i]) === wantColor && samples[i] !== undefined) {
-                                    names.push(String(samples[i]));
-                                }
-                            }
-                            var text = names.join('\n');
-                            if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
-                                navigator.clipboard.writeText(text);
-                            }
-                            copyBtn.textContent = '✓';
-                            setTimeout(function() { copyBtn.textContent = '⎘'; }, 900);
-                            ev.preventDefault();
-                            return;
-                        }
-
-                        var chip = target.closest && target.closest('[data-legend-color]');
-                        if (chip && refs.source) {
-                            var wantColor = chip.getAttribute('data-legend-color');
-                            var sd = refs.source.data;
-                            var origs = sd['original_color'];
-                            var picked = [];
-                            for (var i = 0; i < origs.length; i++) {
-                                if (String(origs[i]) === wantColor) picked.push(i);
-                            }
-                            refs.source.selected.indices = picked;
-                            refs.source.change.emit();
-                            ev.preventDefault();
-                            return;
-                        }
-                    }, false);
-                }
-            }
     """
+    return theme_js + body
+
+
+def _delegated_click_handler_js():
+    """Return a self-contained click delegator installed at page load.
+
+    Reads Bokeh references from ``window._egtRefs`` (populated by the
+    page-load init script) so it can run before any CustomJS fires.
+    Handles: header Reset/Help, scope switcher, legend chip select,
+    copy-samples, all without depending on CustomJS context.
+    """
+    src = r"""
+        if (!window._egtDelegatorInstalled) {
+            window._egtDelegatorInstalled = true;
+            document.addEventListener('click', function(ev) {
+                var refs = window._egtRefs || {};
+                var target = ev.target;
+                if (!target || !target.closest) return;
+
+                var helpBtn = target.closest('[data-action="toggle-help"]');
+                if (helpBtn) {
+                    var panel = document.querySelector('[data-egt-help="panel"]');
+                    if (panel) {
+                        panel.style.display = (panel.style.display === 'none' || panel.style.display === '') ? 'block' : 'none';
+                    }
+                    ev.preventDefault();
+                    return;
+                }
+
+                var resetBtn = target.closest('[data-action="reset-all"]');
+                if (resetBtn) {
+                    if (refs.source) {
+                        var data = refs.source.data;
+                        var colors = data['color'];
+                        var sizes = data['size'];
+                        var alphas = data['alpha'];
+                        var originals = data['original_color'];
+                        for (var i = 0; i < colors.length; i++) {
+                            colors[i] = originals[i];
+                            sizes[i] = 4;
+                            alphas[i] = 0.8;
+                        }
+                        refs.source.selected.indices = [];
+                        refs.source.change.emit();
+                    }
+                    if (refs.filtered_source && refs.source) {
+                        var fd = refs.filtered_source.data;
+                        for (var k in fd) { fd[k] = []; }
+                        var sd = refs.source.data;
+                        var n = sd['UMAP1'] ? sd['UMAP1'].length : 0;
+                        for (var i2 = 0; i2 < n; i2++) {
+                            for (var k2 in fd) { fd[k2].push(sd[k2][i2]); }
+                        }
+                        refs.filtered_source.selected.indices = [];
+                        refs.filtered_source.change.emit();
+                    }
+                    ev.preventDefault();
+                    return;
+                }
+
+                var scopeBtn = target.closest('[data-scope-key]');
+                if (scopeBtn && refs.export_state) {
+                    var newKey = scopeBtn.getAttribute('data-scope-key');
+                    refs.export_state.data['state'] = [newKey];
+                    var btns = document.querySelectorAll('[data-scope-key]');
+                    for (var b = 0; b < btns.length; b++) {
+                        var active = btns[b].getAttribute('data-scope-key') === newKey;
+                        btns[b].style.background = active ? '__EGT_ACCENT__' : 'transparent';
+                        btns[b].style.color = active ? '#ffffff' : '__EGT_ACCENT_FG__';
+                        btns[b].style.borderColor = active ? '__EGT_ACCENT__' : '__EGT_RULE__';
+                    }
+                    refs.export_state.change.emit();
+                    ev.preventDefault();
+                    return;
+                }
+
+                var copyBtn = target.closest('[data-copy-color]');
+                if (copyBtn && refs.source) {
+                    ev.stopPropagation();
+                    var wantColor = copyBtn.getAttribute('data-copy-color');
+                    var sd = refs.source.data;
+                    var origs = sd['original_color'] || [];
+                    var samples = sd['sample'] || sd['taxname'] || [];
+                    var names = [];
+                    for (var i = 0; i < origs.length; i++) {
+                        if (String(origs[i]) === wantColor && samples[i] !== undefined) {
+                            names.push(String(samples[i]));
+                        }
+                    }
+                    var text = names.join(String.fromCharCode(10));
+                    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text);
+                    }
+                    copyBtn.textContent = '✓';
+                    setTimeout(function() { copyBtn.textContent = '⎘'; }, 900);
+                    ev.preventDefault();
+                    return;
+                }
+
+                var chip = target.closest('[data-legend-color]');
+                if (chip && refs.source) {
+                    var wantColor = chip.getAttribute('data-legend-color');
+                    var sd = refs.source.data;
+                    var origs = sd['original_color'];
+                    var picked = [];
+                    for (var i = 0; i < origs.length; i++) {
+                        if (String(origs[i]) === wantColor) picked.push(i);
+                    }
+                    refs.source.selected.indices = picked;
+                    refs.source.change.emit();
+                    ev.preventDefault();
+                    return;
+                }
+            }, false);
+        }
+    """
+    return (
+        src
+        .replace("__EGT_ACCENT__", _UI_ACCENT)
+        .replace("__EGT_ACCENT_FG__", _UI_ACCENT_FG)
+        .replace("__EGT_RULE__", _UI_RULE)
+    )
+
 
 def mgt_mlt_plot_HTML(
     UMAPdf,
@@ -2915,11 +2908,13 @@ def mgt_mlt_plot_HTML(
 
         # Add a near-invisible leaf-hover layer so hovering near a tip reveals
         # its taxname without stealing vertical pixels from the 145 px tree.
+        # Keep the glyph small so the cursor hits at most one tip at a time
+        # (otherwise the tooltip lists every nearby species).
         leaf_glyph = linked_tree_plot.scatter(
             x="x",
             y=0,
             source=linked_tree_leaf_source,
-            size=10,
+            size=4,
             color="#000000",
             alpha=0.0,
             line_color=None,
@@ -2928,6 +2923,7 @@ def mgt_mlt_plot_HTML(
             tooltips=[("Taxon", "@taxname"), ("Taxid", "@taxid")],
             renderers=[leaf_glyph],
             mode="mouse",
+            point_policy="snap_to_data",
         )
         linked_tree_plot.add_tools(leaf_hover)
 
@@ -4178,6 +4174,7 @@ def mgt_mlt_plot_HTML(
     # Store the IDs for later reference in auto-init script
     source_id = source.id if filtered_source is not None else None
     filtered_source_id = filtered_source.id if filtered_source is not None else None
+    export_state_id = export_state.id if filtered_source is not None else None
 
     # Output to HTML
     bokeh.plotting.output_file(outhtml, title=plot_title, mode="inline")
@@ -4258,12 +4255,22 @@ def mgt_mlt_plot_HTML(
                 try {{
                     var source = Bokeh.index["{source_id}"];
                     var filtered_source = Bokeh.index["{filtered_source_id}"];
-                    
+                    var export_state = Bokeh.index["{export_state_id}"];
+
                     // Copy all data from source to filtered_source
                     for (var key in source.data) {{
                         filtered_source.data[key] = source.data[key].slice();
                     }}
                     filtered_source.change.emit();
+
+                    // Bind refs for the page-load click delegator (scope
+                    // switcher, legend chips, header Reset/?). Without
+                    // this, clicks on those buttons do nothing until the
+                    // user fires some other CustomJS callback first.
+                    window._egtRefs = window._egtRefs || {{}};
+                    window._egtRefs.source = source;
+                    window._egtRefs.filtered_source = filtered_source;
+                    if (export_state) {{ window._egtRefs.export_state = export_state; }}
                 }} catch (e) {{
                     console.error("Error initializing table:", e);
                 }}
@@ -4289,12 +4296,21 @@ def mgt_mlt_plot_HTML(
     </script>
 </body>"""
         
+        # Install the delegated click handler at page load so the scope
+        # switcher, legend chips, Reset, and ? buttons are responsive
+        # before any CustomJS has fired.
+        delegator_script = (
+            "<script id=\"egt-delegator\">(function(){"
+            + _delegated_click_handler_js()
+            + "})();</script>"
+        )
+
         before_body, closing_body, after_body = html_content.rpartition('</body>')
         if closing_body:
-            html_content = before_body + init_script + after_body
+            html_content = before_body + init_script + delegator_script + after_body
         else:
-            html_content += init_script
-        
+            html_content += init_script + delegator_script
+
         with open(outhtml, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
