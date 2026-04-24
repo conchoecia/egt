@@ -4223,8 +4223,12 @@ def mgt_mlt_plot_HTML(
             "});})();</script>"
         )
         inject = style_block + kb_script
-        if "</body>" in html_shell:
-            html_shell = html_shell.replace("</body>", inject + "</body>", 1)
+        # Bokeh's inline bundle contains a literal '</body>' string inside
+        # DOMPurify; use rpartition so we only inject before the *real*
+        # closing body tag, not inside a JS string literal.
+        before, sep, after = html_shell.rpartition("</body>")
+        if sep:
+            html_shell = before + inject + sep + after
         else:
             html_shell += inject
         with open(outhtml, 'w', encoding='utf-8') as f:
