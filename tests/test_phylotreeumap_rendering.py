@@ -12,6 +12,7 @@ from scipy.sparse import csr_matrix, save_npz
 from egt import palette as palette_module
 from egt import newick_to_common_ancestors as nta
 from egt import phylotreeumap as ptu
+from egt.custom_taxonomy import CustomTopologyWarning
 
 
 def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
@@ -32,6 +33,21 @@ def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
     html_out = tmp_path / "plot.html"
     ptu.mgt_mlt_plot_HTML(str(umap_df), str(html_out), analysis_type="MGT", plot_sizing_mode="stretch_width")
     assert html_out.exists()
+    html_text = html_out.read_text(encoding="utf-8")
+    assert "Exploration Summary" in html_text
+    assert "renderSelectionSummary" in html_text
+    assert "_row_id" in html_text
+    assert '"label":"Clear"' in html_text
+    assert "Active view" in html_text
+    assert "Color Legend" in html_text
+    assert "search_results" in html_text
+    assert "interactive projection" in html_text
+    assert "Search, lasso, table selection, and export stay linked." in html_text
+    assert "Linked tree enabled" not in html_text
+    assert "UMAP only" not in html_text
+    assert "https://cdn.bokeh.org" not in html_text
+    assert html_text.count("Auto-populate table on page load") == 1
+    assert html_text.rfind("Auto-populate table on page load") > html_text.rfind("Bokeh.safely")
 
     tree_path = tmp_path / "tiny_tree.nwk"
     tree_path.write_text("((Alpha:1,Beta:1):1,Gamma:2);\n")
@@ -97,7 +113,11 @@ fallback:
         tree_height=180,
     )
     html_text = linked_html.read_text(encoding="utf-8")
-    assert "Phylogenetic Tree" in html_text
+    assert "Linked tree enabled" not in html_text
+    assert "Exploration Summary" in html_text
+    assert '"label":"Clear"' in html_text
+    assert "Active view" in html_text
+    assert "Color Legend" in html_text
     assert "tree_node_source" in html_text or "horizontal_segment_index" in html_text
 
     mlt_html_df = tmp_path / "mlt_html.tsv"
@@ -112,6 +132,11 @@ fallback:
     ).to_csv(mlt_html_df, sep="\t", index=False)
     ptu.mgt_mlt_plot_HTML(str(mlt_html_df), str(tmp_path / "mlt_plot.html"), analysis_type="MLT")
     assert (tmp_path / "mlt_plot.html").exists()
+    mlt_html_text = (tmp_path / "mlt_plot.html").read_text(encoding="utf-8")
+    assert "Exploration Summary" in mlt_html_text
+    assert "Active view" in mlt_html_text
+    assert "Color Legend" in mlt_html_text
+    assert "UMAP only" not in mlt_html_text
 
     mlt_df = tmp_path / "mlt.df"
     pd.DataFrame(
@@ -127,6 +152,117 @@ fallback:
 
     ptu.plot_umap_pdf(str(tmp_path / "missing.df"), str(tmp_path / "empty.pdf"), "Missing", color_by_clade=False)
     assert (tmp_path / "empty.pdf").exists()
+
+
+def test_color_legend_uses_palette_clade_labels(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(palette_module, "_get_shared_taxid_canonicalizer", lambda: None)
+    palette_yaml = tmp_path / "palette.yaml"
+    palette_yaml.write_text(
+        """
+schema_version: 1
+clades:
+  percomorphaceae:
+    taxid: 1489872
+    label: "Percomorphaceae"
+    color: "#c07535"
+fallback:
+  label: "other"
+  color: "#999999"
+""".lstrip()
+    )
+    plot_data = pd.DataFrame(
+        {
+            "color": ["#c07535", "#c07535"],
+            "original_color": ["#c07535", "#c07535"],
+            "taxid_list_str": ["1;33208;1489872;215358", "1;33208;1489872;390379"],
+            "taxname": ["Larimichthys crocea", "Thalassophryne amazonica"],
+            "taxname_list_str": [
+                "root;Metazoa;Percomorphaceae;Larimichthys crocea",
+                "root;Metazoa;Percomorphaceae;Thalassophryne amazonica",
+            ],
+        }
+    )
+
+    labelled = ptu._add_color_group_labels(plot_data.copy(), str(palette_yaml))
+    assert labelled["color_group_label"].tolist() == ["Percomorphaceae", "Percomorphaceae"]
+    legend_html = ptu._color_legend_html(labelled)
+    assert "Percomorphaceae" in legend_html
+    assert "Larimichthys crocea" not in legend_html
+
+
+def test_taxonomy_summary_reports_mrca_lineage_without_level_columns():
+    plot_data = pd.DataFrame(
+        {
+            "sample": ["a", "b", "c"],
+            "taxid": [1, 2, 3],
+            "taxname": ["one", "two", "three"],
+            "taxname_list_str": [
+                " root ; cellular organisms ; Eukaryota ; Opisthokonta ; Metazoa ; A ",
+                "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;B",
+                "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;B",
+            ],
+            "level_1": [
+                "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)",
+                "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)",
+                "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)",
+            ],
+            "level_2": ["Metazoa (33208); Clade A (10)", "Metazoa (33208); Clade B (20)", "Metazoa (33208); Clade B (20)"],
+        }
+    )
+
+    summary_html = ptu._taxonomy_summary_default_html(plot_data, "MGT")
+
+    assert "MRCA lineage" in summary_html
+    assert "root; cellular organisms; Eukaryota; Opisthokonta; Metazoa" in summary_html
+    assert "Shared ancestor:</strong> Metazoa" in summary_html
+    assert "Dominant distinguishing level" not in summary_html
+    assert "Level 2:" not in summary_html
+
+
+def test_custom_taxonomy_normalization_removes_eumetazoa():
+    plot_data = pd.DataFrame(
+        {
+            "sample": ["cteno", "bilat", "sponge"],
+            "taxid": [27923, 33213, 6040],
+            "taxname": ["Mnemiopsis leidyi", "Bilateria", "Porifera"],
+            "taxid_list_str": [
+                "1;131567;2759;33154;33208;6072;10197;27923",
+                "1;131567;2759;33154;33208;6072;33213",
+                "1;131567;2759;33154;33208;6040",
+            ],
+            "taxname_list_str": [
+                "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;Eumetazoa;Ctenophora;Mnemiopsis leidyi",
+                "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;Eumetazoa;Bilateria",
+                "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;Porifera",
+            ],
+            "level_1": [""] * 3,
+            "level_2": [""] * 3,
+            "printstring": [""] * 3,
+        }
+    )
+
+    with pytest.warns(CustomTopologyWarning, match="Eumetazoa"):
+        normalized = ptu._normalize_custom_taxonomy_columns(plot_data)
+
+    assert "Eumetazoa" not in ";".join(normalized["taxname_list_str"])
+    assert "6072" not in ";".join(normalized["taxid_list_str"])
+    assert normalized.loc[0, "taxname_list_str"] == (
+        "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;Ctenophora;Mnemiopsis leidyi"
+    )
+    assert normalized.loc[1, "taxname_list_str"] == (
+        "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;Myriazoa;Parahoxozoa;Bilateria"
+    )
+    assert normalized.loc[2, "taxname_list_str"] == (
+        "root;cellular organisms;Eukaryota;Opisthokonta;Metazoa;Myriazoa;Porifera"
+    )
+    assert "Myriazoa (-67)" in normalized.loc[1, "printstring"]
+    assert "Parahoxozoa (-68)" in normalized.loc[1, "printstring"]
+
+    string_typed = plot_data.astype("string")
+    with pytest.warns(CustomTopologyWarning, match="Eumetazoa"):
+        normalized_string = ptu._normalize_custom_taxonomy_columns(string_typed)
+    assert "Eumetazoa" not in ";".join(normalized_string["taxname_list_str"])
+    assert "6072" not in ";".join(normalized_string["taxid_list_str"])
 
 
 def test_build_linked_tree_bokeh_bundle_small_tree(tmp_path: Path, monkeypatch):

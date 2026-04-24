@@ -35,7 +35,7 @@ OUTPUT:
 CUSTOM PHYLOGENY:
 =================
 When --custom_phylogeny flag is used, Ctenophora (10197) is placed as sister
-to all other animals, rather than nested within Eumetazoa as in NCBI taxonomy.
+to all other animals, rather than nested inside the NCBI 6072 clade.
 
 This reflects the phylogenomic hypothesis from Schultz et al. (2023) Nature:
 https://doi.org/10.1038/s41586-023-05936-6
@@ -45,10 +45,12 @@ The modified topology is:
   ├─ Ctenophora (10197)
   └─ Myriazoa (-67) [CUSTOM NODE]
      ├─ Porifera (6040)
-     └─ Eumetazoa (6072)
-        └─ [Cnidaria, Bilateria, etc.]
+     └─ Parahoxozoa (-68) [CUSTOM NODE]
+        ├─ Cnidaria (6073) and Placozoa (10226)
+        └─ Bilateria (33213)
 
-Note: Myriazoa is represented by fake taxid -67 (negative to avoid conflicts).
+Note: Myriazoa and Parahoxozoa are represented by fake taxids -67 and -68
+(negative to avoid conflicts).
 
 REQUIREMENTS:
 =============
@@ -411,7 +413,7 @@ def build_custom_topology_tree(taxids, ncbi):
     This implements the custom topology:
       Metazoa (33208)
       ├─   Ctenophora (10197)
-      └─   Myriazoa (-67) [Porifera + Eumetazoa]
+      └─   Myriazoa (-67) [Porifera + Parahoxozoa]
        ├─  Porifera (6040)
        └─  Parahoxozoa (-68) [[Cnidaria and Placozoa], Bilateria]
         ├─ Cnidaria (6073) and Placozoa (10226)
@@ -650,7 +652,7 @@ def main(argv=None):
     if args.custom_phylogeny:
         print("Building tree with custom Ctenophora phylogeny...")
         print("  - Ctenophora (10197) as sister to all other animals")
-        print("  - Myriazoa (-67) clade for Porifera + Eumetazoa")
+        print("  - Myriazoa (-67) clade for Porifera + Parahoxozoa")
         print("  - Parahoxozoa (-68) clade for Cnidaria+Placozoa sister to Bilateria")
         
         # Build tree by creating subtrees and stitching them together

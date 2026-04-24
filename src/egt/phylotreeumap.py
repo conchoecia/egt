@@ -28,6 +28,7 @@ import argparse
 from  ast import literal_eval as aliteraleval
 import bokeh           # bokeh is used to visualize and save the UMAP
 from ete4 import NCBITaxa,Tree
+import html
 import networkx as nx
 import numpy as np
 np.set_printoptions(linewidth=np.inf)
@@ -65,6 +66,11 @@ from egt import rbh_tools
 
 from egt.legacy.plot_alg_fusions_v2 import taxids_to_taxidstringdict
 from egt.palette import Palette
+from egt.custom_taxonomy import (
+    CUSTOM_TAXID_NAMES as _CUSTOM_TAXID_NAMES,
+    EUMETAZOA_TAXID as _EUMETAZOA_TAXID,
+    apply_custom_animal_topology_to_taxid_lineage,
+)
 
 from itertools import combinations
 
@@ -804,6 +810,11 @@ def rbh_to_gb(sample, rbhdf, outfile):
     # Save the result DataFrame to a tsv file
     result_df.to_csv(outfile, sep="\t", index=False, compression="gzip")
 
+def _apply_custom_animal_topology_to_taxid_lineage(lineage, warn=True):
+    """Return lineage with manuscript animal topology replacing NCBI Eumetazoa."""
+    return apply_custom_animal_topology_to_taxid_lineage(lineage, warn=warn)
+
+
 def NCBI_taxid_to_taxdict(ncbi, taxid) -> dict:
     """
     Takes a single NCBI taxid as input and returns a dictionary with useful information:
@@ -857,6 +868,8 @@ def NCBI_taxid_to_taxdict(ncbi, taxid) -> dict:
         raise ValueError(f"The lineage is empty for the taxid {taxid}. Exiting.")
     if len(names) == 0:
         raise ValueError(f"The names are empty for the taxid {taxid}. Exiting.")
+    lineage = _apply_custom_animal_topology_to_taxid_lineage(lineage)
+    names.update(_CUSTOM_TAXID_NAMES)
     entry["taxname"]          = names[taxid]
     entry["taxid_list"]       = [taxid for taxid in lineage]
     entry["taxid_list_str"]   = ";".join([str(taxid) for taxid in lineage])
@@ -1530,6 +1543,688 @@ def _linked_tree_sync_js():
             }
     """
 
+def _split_taxonomy_lineage(value):
+    """Split a semicolon-delimited taxonomy lineage into non-empty labels."""
+    if value is None:
+        return []
+    try:
+        if pd.isna(value):
+            return []
+    except (TypeError, ValueError):
+        pass
+    return [part.strip() for part in str(value).split(";") if part and part.strip()]
+
+
+def _split_taxid_lineage(value):
+    """Split a semicolon-delimited taxid lineage into integer taxids."""
+    if value is None:
+        return []
+    try:
+        if pd.isna(value):
+            return []
+    except (TypeError, ValueError):
+        pass
+    taxids = []
+    for part in str(value).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            taxids.append(int(part))
+        except ValueError:
+            return []
+    return taxids
+
+
+def _format_taxid_lineage(taxids):
+    return ";".join(str(taxid) for taxid in taxids)
+
+
+def _format_taxname_lineage(taxids, names_by_taxid):
+    labels = []
+    for taxid in taxids:
+        label = _CUSTOM_TAXID_NAMES.get(taxid) or names_by_taxid.get(taxid)
+        if label is None:
+            label = str(taxid)
+        labels.append(str(label).strip())
+    return ";".join(label for label in labels if label)
+
+
+def _format_printstring_lineage(taxids, names_by_taxid):
+    labels = []
+    for taxid in taxids:
+        label = _CUSTOM_TAXID_NAMES.get(taxid) or names_by_taxid.get(taxid)
+        if label is None:
+            label = str(taxid)
+        labels.append(f" {str(label).strip()} ({taxid})")
+    return ";".join(labels)
+
+
+def _normalize_custom_taxonomy_columns(plot_data):
+    """Normalize stale NCBI animal lineages to the manuscript custom topology."""
+    if "taxid_list_str" not in plot_data.columns:
+        return plot_data
+
+    plot_data = plot_data.copy()
+    warned_eumetazoa = False
+    for idx, row in plot_data.iterrows():
+        original_taxids = _split_taxid_lineage(row.get("taxid_list_str", ""))
+        if not original_taxids:
+            continue
+
+        should_warn = (not warned_eumetazoa) and (_EUMETAZOA_TAXID in original_taxids)
+        custom_taxids = _apply_custom_animal_topology_to_taxid_lineage(original_taxids, warn=should_warn)
+        if should_warn and custom_taxids != original_taxids:
+            warned_eumetazoa = True
+        if custom_taxids == original_taxids:
+            continue
+
+        original_names = _split_taxonomy_lineage(row.get("taxname_list_str", ""))
+        names_by_taxid = {
+            taxid: original_names[pos]
+            for pos, taxid in enumerate(original_taxids)
+            if pos < len(original_names)
+        }
+
+        taxid_str = _format_taxid_lineage(custom_taxids)
+        taxname_str = _format_taxname_lineage(custom_taxids, names_by_taxid)
+        plot_data.at[idx, "taxid_list_str"] = taxid_str
+        if "taxname_list_str" in plot_data.columns:
+            plot_data.at[idx, "taxname_list_str"] = taxname_str
+        if "taxid_list" in plot_data.columns:
+            plot_data.at[idx, "taxid_list"] = str(custom_taxids)
+        if "taxname_list" in plot_data.columns:
+            plot_data.at[idx, "taxname_list"] = str(_split_taxonomy_lineage(taxname_str))
+        if "printstring" in plot_data.columns:
+            plot_data.at[idx, "printstring"] = _format_printstring_lineage(custom_taxids, names_by_taxid)
+
+        level_columns = sorted(
+            [col for col in plot_data.columns if col.startswith("level_")],
+            key=lambda col: int(col.split("_", 1)[1]) if col.split("_", 1)[1].isdigit() else 999,
+        )
+        npl = 4
+        for pos, col in enumerate(level_columns):
+            start = pos * npl
+            plot_data.at[idx, col] = _format_printstring_lineage(custom_taxids[start:start + npl], names_by_taxid)
+
+    return plot_data
+
+
+def _taxonomy_summary_default_html(plot_data, analysis_type):
+    """Return initial HTML for the plot exploration summary panel."""
+    indices = list(range(len(plot_data)))
+
+    def escape(value):
+        return html.escape(str(value), quote=True)
+
+    def label_for_index(idx):
+        if "taxname" in plot_data.columns:
+            value = plot_data.iloc[idx].get("taxname", "")
+            if not pd.isna(value) and str(value).strip():
+                return str(value).strip()
+        if "taxid" in plot_data.columns:
+            value = plot_data.iloc[idx].get("taxid", "")
+            if not pd.isna(value) and str(value).strip():
+                return f"taxid {str(value).strip()}"
+        if "sample" in plot_data.columns:
+            value = plot_data.iloc[idx].get("sample", "")
+            if not pd.isna(value) and str(value).strip():
+                return str(value).strip()
+        return "Unknown"
+
+    lineages = []
+    if "taxname_list_str" in plot_data.columns:
+        for idx in indices:
+            lineages.append(_split_taxonomy_lineage(plot_data.iloc[idx].get("taxname_list_str", "")))
+
+    shared = []
+    non_empty_lineages = [lineage for lineage in lineages if lineage]
+    if non_empty_lineages:
+        min_depth = min(len(lineage) for lineage in non_empty_lineages)
+        for depth in range(min_depth):
+            candidate = non_empty_lineages[0][depth]
+            if all(lineage[depth] == candidate for lineage in non_empty_lineages):
+                shared.append(candidate)
+            else:
+                break
+
+    counts = {}
+    if non_empty_lineages:
+        depth = len(shared)
+        for idx, lineage in zip(indices, lineages):
+            if not lineage:
+                label = label_for_index(idx)
+            elif depth < len(lineage):
+                label = lineage[depth]
+            else:
+                label = lineage[-1]
+            counts[label] = counts.get(label, 0) + 1
+    else:
+        fallback_field = "taxname" if "taxname" in plot_data.columns else ("taxid" if "taxid" in plot_data.columns else None)
+        if fallback_field:
+            for idx in indices:
+                label = label_for_index(idx)
+                counts[label] = counts.get(label, 0) + 1
+
+    top_items = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    total = len(indices)
+    top_label, top_count = ("None", 0) if not top_items else top_items[0]
+    shared_label = shared[-1] if shared else "No single shared ancestor"
+    shared_lineage = "; ".join(shared)
+    composition_label = f"Subclades below {shared_label}" if shared else "Composition"
+
+    bar_html = []
+    for label, count in top_items:
+        pct = (count / total * 100.0) if total else 0.0
+        bar_html.append(
+            "<div style=\"margin:7px 0;\">"
+            f"<div style=\"display:flex;justify-content:space-between;gap:10px;font-size:12px;\">"
+            f"<span style=\"overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{escape(label)}</span>"
+            f"<span>{count} ({pct:.1f}%)</span>"
+            "</div>"
+            "<div style=\"height:8px;background:#e8e6df;border-radius:4px;overflow:hidden;\">"
+            f"<div style=\"height:8px;width:{pct:.1f}%;background:#376f6b;\"></div>"
+            "</div>"
+            "</div>"
+        )
+
+    if not bar_html:
+        bar_html.append("<div style=\"color:#6f6a5f;font-size:12px;\">No taxonomy fields available for this dataset.</div>")
+
+    lineage_line = (
+        "<div style=\"margin-top:4px;\"><strong>MRCA lineage:</strong> "
+        f"<span style=\"overflow-wrap:anywhere;\">{escape(shared_lineage)}</span></div>"
+        if shared_lineage
+        else ""
+    )
+    return (
+        "<div style=\"box-sizing:border-box;width:100%;padding:14px 16px;"
+        "border:1px solid #d7d0c3;background:#fbfaf7;color:#25231f;font-family:Arial,sans-serif;\">"
+        "<div style=\"font-size:15px;font-weight:700;margin-bottom:8px;\">Exploration Summary</div>"
+        f"<div><strong>Scope:</strong> All points ({total})</div>"
+        f"<div><strong>Shared ancestor:</strong> {escape(shared_label)}</div>"
+        f"{lineage_line}"
+        f"<div><strong>Most common:</strong> {escape(top_label)} ({top_count})</div>"
+        f"<div style=\"margin-top:10px;font-weight:700;font-size:13px;\">{escape(composition_label)}</div>"
+        f"{''.join(bar_html)}"
+        "</div>"
+    )
+
+
+def _selection_status_html(scope, shown, total):
+    """Return the compact active-state banner shown above the plot controls."""
+    pct = (shown / total * 100.0) if total else 0.0
+    return (
+        "<div style=\"box-sizing:border-box;width:100%;padding:10px 12px;"
+        "border:1px solid #c8d6d2;background:#eef7f4;color:#1f3935;"
+        "font-family:Arial,sans-serif;font-size:13px;\">"
+        f"<strong>Active view:</strong> {html.escape(str(scope), quote=True)} "
+        f"<span style=\"color:#46615c;\">({shown} of {total} samples, {pct:.1f}%)</span>"
+        "</div>"
+    )
+
+
+def _plot_header_html(plot_title, analysis_type, total):
+    """Return the top-level page header for the interactive manuscript plot."""
+    title = html.escape(str(plot_title), quote=True)
+    analysis = html.escape(str(analysis_type or ""), quote=True)
+    return (
+        "<div style=\"box-sizing:border-box;width:100%;padding:14px 18px;"
+        "border-bottom:1px solid #d8d4cc;background:#ffffff;color:#24211d;"
+        "font-family:Arial,sans-serif;display:flex;align-items:center;"
+        "justify-content:space-between;gap:18px;\">"
+        "<div style=\"min-width:0;\">"
+        f"<div style=\"font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">{title}</div>"
+        "<div style=\"font-size:12px;color:#625e55;margin-top:3px;\">"
+        f"{analysis} interactive projection &middot; {total} samples"
+        "</div>"
+        "</div>"
+        "<div style=\"font-size:12px;color:#625e55;text-align:right;white-space:nowrap;\">"
+        "Search, lasso, table selection, and export stay linked."
+        "</div>"
+        "</div>"
+    )
+
+
+def _panel_section_html(title, subtitle=""):
+    """Return a small section label for the dashboard side panel."""
+    subtitle_html = (
+        f"<div style=\"font-size:11px;color:#6f6a5f;margin-top:2px;\">{html.escape(str(subtitle), quote=True)}</div>"
+        if subtitle
+        else ""
+    )
+    return (
+        "<div style=\"box-sizing:border-box;width:100%;padding:10px 0 4px;"
+        "font-family:Arial,sans-serif;color:#25231f;\">"
+        f"<div style=\"font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;\">{html.escape(str(title), quote=True)}</div>"
+        f"{subtitle_html}"
+        "</div>"
+    )
+
+
+def _representative_label_for_rows(rows):
+    """Choose a concise label for a color group in the compact legend."""
+    if "color_group_label" in rows.columns:
+        labels = []
+        for value in rows["color_group_label"]:
+            if value is None:
+                continue
+            try:
+                if pd.isna(value):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            label = str(value).strip()
+            if label:
+                labels.append(label)
+        if labels:
+            counts = {}
+            for label in labels:
+                counts[label] = counts.get(label, 0) + 1
+            return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+    label_candidates = []
+    for _, row in rows.iterrows():
+        lineage = _split_taxonomy_lineage(row.get("taxname_list_str", ""))
+        if lineage:
+            label_candidates.append(lineage[-1])
+        elif "taxname" in row and not pd.isna(row.get("taxname", "")) and str(row.get("taxname", "")).strip():
+            label_candidates.append(str(row.get("taxname", "")).strip())
+        elif "taxid" in row and not pd.isna(row.get("taxid", "")) and str(row.get("taxid", "")).strip():
+            label_candidates.append(f"taxid {str(row.get('taxid', '')).strip()}")
+
+    if not label_candidates:
+        return "Unlabeled"
+
+    counts = {}
+    for label in label_candidates:
+        counts[label] = counts.get(label, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _palette_label_maps(palette_path=None):
+    """Return palette label lookups used to name color groups in the HTML UI."""
+    try:
+        palette = Palette.from_yaml(palette_path)
+    except Exception:
+        return None, {}
+
+    color_to_labels = {}
+    for _, clade in palette.items():
+        color = str(clade.color).strip().lower()
+        if not color:
+            continue
+        color_to_labels.setdefault(color, [])
+        if clade.label not in color_to_labels[color]:
+            color_to_labels[color].append(clade.label)
+
+    fallback_color = str(palette.fallback.color).strip().lower()
+    if fallback_color:
+        color_to_labels.setdefault(fallback_color, [])
+        if palette.fallback.label not in color_to_labels[fallback_color]:
+            color_to_labels[fallback_color].append(palette.fallback.label)
+
+    color_to_label = {
+        color: " / ".join(labels)
+        for color, labels in color_to_labels.items()
+    }
+    return palette, color_to_label
+
+
+def _add_color_group_labels(plot_data, palette_path=None):
+    """Add a stable palette/clade label for each plotted color."""
+    palette, color_to_label = _palette_label_maps(palette_path)
+
+    def label_for_row(row):
+        color = str(row.get("color", "")).strip().lower()
+        if palette is not None and "taxid_list_str" in row:
+            try:
+                clade = palette.for_lineage_string(row.get("taxid_list_str", ""))
+            except Exception:
+                clade = None
+            if clade is not None and str(clade.label).strip():
+                return str(clade.label).strip()
+
+        if color in color_to_label:
+            return color_to_label[color]
+
+        lineage = _split_taxonomy_lineage(row.get("taxname_list_str", ""))
+        if lineage:
+            return lineage[-1]
+        if "taxname" in row and not pd.isna(row.get("taxname", "")) and str(row.get("taxname", "")).strip():
+            return str(row.get("taxname", "")).strip()
+        if "taxid" in row and not pd.isna(row.get("taxid", "")) and str(row.get("taxid", "")).strip():
+            return f"taxid {str(row.get('taxid', '')).strip()}"
+        return "Unlabeled"
+
+    plot_data["color_group_label"] = plot_data.apply(label_for_row, axis=1)
+    return plot_data
+
+
+def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
+    """Return a collapsible legend summarizing the active color palette."""
+    if "original_color" not in plot_data.columns:
+        return ""
+
+    total = len(plot_data)
+    rows = []
+    for color, group in plot_data.groupby("original_color", dropna=False):
+        color_text = str(color)
+        rows.append((color_text, len(group), _representative_label_for_rows(group)))
+
+    rows = sorted(rows, key=lambda item: (-item[1], item[2], item[0]))
+    visible_rows = rows[:max_items]
+    omitted = max(0, len(rows) - len(visible_rows))
+
+    items = []
+    for color, count, label in visible_rows:
+        pct = (count / total * 100.0) if total else 0.0
+        safe_color = html.escape(color, quote=True)
+        safe_label = html.escape(label, quote=True)
+        items.append(
+            "<div style=\"display:grid;grid-template-columns:18px 1fr auto;align-items:center;"
+            "gap:8px;margin:6px 0;font-size:12px;\">"
+            f"<span style=\"width:14px;height:14px;border-radius:3px;background:{safe_color};"
+            "border:1px solid rgba(0,0,0,.18);display:inline-block;\"></span>"
+            f"<span style=\"overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{safe_label}</span>"
+            f"<span style=\"color:#6f6a5f;\">{count} ({pct:.1f}%)</span>"
+            "</div>"
+        )
+
+    omitted_html = (
+        f"<div style=\"font-size:11px;color:#6f6a5f;margin-top:8px;\">+ {omitted} additional color groups not shown in this compact legend.</div>"
+        if omitted
+        else ""
+    )
+
+    return (
+        "<div style=\"box-sizing:border-box;width:100%;padding:12px 14px;"
+        "border:1px solid #d7d0c3;background:#fffdf8;color:#25231f;font-family:Arial,sans-serif;\">"
+        "<div style=\"font-size:13px;font-weight:700;\">Color Legend</div>"
+        "<div style=\"font-size:11px;color:#6f6a5f;margin:6px 0 10px;\">"
+        f"{html.escape(str(scope_label), quote=True)}: top {len(visible_rows)} of {len(rows)} color groups by sample count."
+        "</div>"
+        f"{''.join(items)}"
+        f"{omitted_html}"
+        "</div>"
+    )
+
+
+def _taxonomy_summary_js():
+    """Return a CustomJS helper that renders the lasso/search composition panel."""
+    return r"""
+            function escapeHtml(value) {
+                return String(value === null || value === undefined ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function splitLineage(value) {
+                if (value === null || value === undefined) {
+                    return [];
+                }
+                return String(value).split(';').map(function(part) {
+                    return part.trim();
+                }).filter(function(part) {
+                    return part.length > 0;
+                });
+            }
+
+            function fallbackLabel(idx) {
+                if (data.hasOwnProperty('taxname') && String(data['taxname'][idx] || '').trim() !== '') {
+                    return String(data['taxname'][idx]).trim();
+                }
+                if (data.hasOwnProperty('taxid') && String(data['taxid'][idx] || '').trim() !== '') {
+                    return 'taxid ' + String(data['taxid'][idx]).trim();
+                }
+                if (data.hasOwnProperty('sample') && String(data['sample'][idx] || '').trim() !== '') {
+                    return String(data['sample'][idx]).trim();
+                }
+                return 'Unknown';
+            }
+
+            function sortedCountEntries(counts) {
+                return Object.keys(counts).map(function(label) {
+                    return [label, counts[label]];
+                }).sort(function(a, b) {
+                    if (b[1] !== a[1]) {
+                        return b[1] - a[1];
+                    }
+                    return String(a[0]).localeCompare(String(b[0]));
+                });
+            }
+
+            function commonPrefix(lineages) {
+                var usable = lineages.filter(function(lineage) { return lineage.length > 0; });
+                if (usable.length === 0) {
+                    return [];
+                }
+                var minDepth = usable.reduce(function(acc, lineage) {
+                    return Math.min(acc, lineage.length);
+                }, usable[0].length);
+                var shared = [];
+                for (var depth = 0; depth < minDepth; depth++) {
+                    var candidate = usable[0][depth];
+                    var allSame = true;
+                    for (var i = 1; i < usable.length; i++) {
+                        if (usable[i][depth] !== candidate) {
+                            allSame = false;
+                            break;
+                        }
+                    }
+                    if (!allSame) {
+                        break;
+                    }
+                    shared.push(candidate);
+                }
+                return shared;
+            }
+
+            function exportStateKey(scope) {
+                var label = String(scope || '').toLowerCase();
+                if (label.indexOf('lasso') !== -1) {
+                    return 'lasso_selection';
+                }
+                if (label.indexOf('table') !== -1) {
+                    return 'table_selection';
+                }
+                if (label.indexOf('search') !== -1) {
+                    return 'search_results';
+                }
+                if (label.indexOf('shown') !== -1) {
+                    return 'shown_rows';
+                }
+                return 'all';
+            }
+
+            function colorLegendLabel(idx) {
+                if (data.hasOwnProperty('color_group_label') && String(data['color_group_label'][idx] || '').trim() !== '') {
+                    return String(data['color_group_label'][idx]).trim();
+                }
+                return fallbackLabel(idx);
+            }
+
+            function renderColorLegend(indices, scope) {
+                if (typeof legend_div === 'undefined' || !legend_div || !data.hasOwnProperty('original_color')) {
+                    return;
+                }
+
+                var total = indices.length;
+                var groups = {};
+                for (var i = 0; i < indices.length; i++) {
+                    var idx = indices[i];
+                    var color = String(data['original_color'][idx] || '').trim();
+                    if (color === '') {
+                        color = '#bfbfbf';
+                    }
+                    if (!groups[color]) {
+                        groups[color] = {count: 0, labelCounts: {}};
+                    }
+                    groups[color].count += 1;
+                    var label = colorLegendLabel(idx);
+                    groups[color].labelCounts[label] = (groups[color].labelCounts[label] || 0) + 1;
+                }
+
+                var rows = Object.keys(groups).map(function(color) {
+                    var labelEntries = sortedCountEntries(groups[color].labelCounts);
+                    var label = labelEntries.length > 0 ? labelEntries[0][0] : 'Unlabeled';
+                    return [color, groups[color].count, label];
+                }).sort(function(a, b) {
+                    if (b[1] !== a[1]) {
+                        return b[1] - a[1];
+                    }
+                    var labelCompare = String(a[2]).localeCompare(String(b[2]));
+                    if (labelCompare !== 0) {
+                        return labelCompare;
+                    }
+                    return String(a[0]).localeCompare(String(b[0]));
+                });
+
+                var maxItems = 28;
+                var visible = rows.slice(0, maxItems);
+                var omitted = Math.max(0, rows.length - visible.length);
+                var items = '';
+                for (var r = 0; r < visible.length; r++) {
+                    var color = visible[r][0];
+                    var count = visible[r][1];
+                    var label = visible[r][2];
+                    var pct = total > 0 ? (count / total * 100.0) : 0.0;
+                    items += '<div style="display:grid;grid-template-columns:18px 1fr auto;align-items:center;' +
+                        'gap:8px;margin:6px 0;font-size:12px;">' +
+                        '<span style="width:14px;height:14px;border-radius:3px;background:' + escapeHtml(color) + ';' +
+                        'border:1px solid rgba(0,0,0,.18);display:inline-block;"></span>' +
+                        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
+                        '<span style="color:#6f6a5f;">' + count + ' (' + pct.toFixed(1) + '%)</span>' +
+                        '</div>';
+                }
+                if (items === '') {
+                    items = '<div style="color:#6f6a5f;font-size:12px;">No color groups available for this view.</div>';
+                }
+                var omittedHtml = omitted > 0
+                    ? '<div style="font-size:11px;color:#6f6a5f;margin-top:8px;">+ ' + omitted + ' additional color groups not shown in this compact legend.</div>'
+                    : '';
+
+                legend_div.text =
+                    '<div style="box-sizing:border-box;width:100%;padding:12px 14px;' +
+                    'border:1px solid #d7d0c3;background:#fffdf8;color:#25231f;font-family:Arial,sans-serif;">' +
+                    '<div style="font-size:13px;font-weight:700;">Color Legend</div>' +
+                    '<div style="font-size:11px;color:#6f6a5f;margin:6px 0 10px;">' +
+                    escapeHtml(scope || 'Active view') + ': top ' + visible.length + ' of ' + rows.length + ' color groups by sample count.' +
+                    '</div>' +
+                    items +
+                    omittedHtml +
+                    '</div>';
+            }
+
+            function renderSelectionSummary(selected_indices, show_all_data, scope_label) {
+                var all_indices = [];
+                for (var i = 0; i < data['UMAP1'].length; i++) {
+                    all_indices.push(i);
+                }
+                var indices = (show_all_data || !selected_indices || selected_indices.length === 0)
+                    ? all_indices
+                    : selected_indices.slice();
+                var total = indices.length;
+
+                var lineages = [];
+                var hasLineages = data.hasOwnProperty('taxname_list_str');
+                if (hasLineages) {
+                    for (var i = 0; i < indices.length; i++) {
+                        lineages.push(splitLineage(data['taxname_list_str'][indices[i]]));
+                    }
+                }
+
+                var shared = hasLineages ? commonPrefix(lineages) : [];
+                var sharedLabel = shared.length > 0 ? shared[shared.length - 1] : 'No single shared ancestor';
+                var sharedLineage = shared.join('; ');
+                var depth = shared.length;
+                var counts = {};
+
+                if (hasLineages) {
+                    for (var i = 0; i < indices.length; i++) {
+                        var idx = indices[i];
+                        var lineage = lineages[i];
+                        var label = '';
+                        if (lineage.length === 0) {
+                            label = fallbackLabel(idx);
+                        } else if (depth < lineage.length) {
+                            label = lineage[depth];
+                        } else {
+                            label = lineage[lineage.length - 1];
+                        }
+                        counts[label] = (counts[label] || 0) + 1;
+                    }
+                } else {
+                    for (var i = 0; i < indices.length; i++) {
+                        var label = fallbackLabel(indices[i]);
+                        counts[label] = (counts[label] || 0) + 1;
+                    }
+                }
+
+                var entries = sortedCountEntries(counts).slice(0, 8);
+                var topLabel = entries.length > 0 ? entries[0][0] : 'None';
+                var topCount = entries.length > 0 ? entries[0][1] : 0;
+                var compositionLabel = shared.length > 0 ? 'Subclades below ' + sharedLabel : 'Composition';
+                var scope = scope_label || (indices.length === all_indices.length ? 'All points' : 'Selected points');
+                var allCount = all_indices.length;
+                var pctShown = allCount > 0 ? (total / allCount * 100.0) : 0.0;
+
+                var bars = '';
+                if (entries.length === 0) {
+                    bars = '<div style="color:#6f6a5f;font-size:12px;">No taxonomy fields available for this dataset.</div>';
+                }
+                for (var i = 0; i < entries.length; i++) {
+                    var label = entries[i][0];
+                    var count = entries[i][1];
+                    var pct = total > 0 ? (count / total * 100.0) : 0.0;
+                    bars += '<div style="margin:7px 0;">' +
+                        '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;">' +
+                        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
+                        '<span>' + count + ' (' + pct.toFixed(1) + '%)</span>' +
+                        '</div>' +
+                        '<div style="height:8px;background:#e8e6df;border-radius:4px;overflow:hidden;">' +
+                        '<div style="height:8px;width:' + pct.toFixed(1) + '%;background:#376f6b;"></div>' +
+                        '</div>' +
+                        '</div>';
+                }
+
+                if (typeof summary_div !== 'undefined' && summary_div) {
+                    summary_div.text =
+                        '<div style="box-sizing:border-box;width:100%;padding:14px 16px;' +
+                        'border:1px solid #d7d0c3;background:#fbfaf7;color:#25231f;font-family:Arial,sans-serif;">' +
+                        '<div style="font-size:15px;font-weight:700;margin-bottom:8px;">Exploration Summary</div>' +
+                        '<div><strong>Scope:</strong> ' + escapeHtml(scope) + ' (' + total + ')</div>' +
+                        '<div><strong>Shared ancestor:</strong> ' + escapeHtml(sharedLabel) + '</div>' +
+                        (sharedLineage ? '<div style="margin-top:4px;"><strong>MRCA lineage:</strong> <span style="overflow-wrap:anywhere;">' + escapeHtml(sharedLineage) + '</span></div>' : '') +
+                        '<div><strong>Most common:</strong> ' + escapeHtml(topLabel) + ' (' + topCount + ')</div>' +
+                        '<div style="margin-top:10px;font-weight:700;font-size:13px;">' + escapeHtml(compositionLabel) + '</div>' +
+                        bars +
+                        '</div>';
+                }
+
+                if (typeof status_div !== 'undefined' && status_div) {
+                    status_div.text =
+                        '<div style="box-sizing:border-box;width:100%;padding:10px 12px;' +
+                        'border:1px solid #c8d6d2;background:#eef7f4;color:#1f3935;' +
+                        'font-family:Arial,sans-serif;font-size:13px;">' +
+                        '<strong>Active view:</strong> ' + escapeHtml(scope) + ' ' +
+                        '<span style="color:#46615c;">(' + total + ' of ' + allCount + ' samples, ' + pctShown.toFixed(1) + '%)</span>' +
+                        '</div>';
+                }
+
+                if (typeof export_state !== 'undefined' && export_state) {
+                    export_state.data['state'] = [exportStateKey(scope)];
+                    export_state.data['rows'] = [total];
+                    export_state.change.emit();
+                }
+
+                renderColorLegend(indices, scope);
+            }
+    """
+
 def mgt_mlt_plot_HTML(
     UMAPdf,
     outhtml,
@@ -1541,7 +2236,7 @@ def mgt_mlt_plot_HTML(
     match_aspect=True,
     tree_newick=None,
     tree_palette=None,
-    tree_height=260,
+    tree_height=150,
 ):
     """
     This function takes the UMAPdf and generates an interactive Bokeh plot
@@ -1702,11 +2397,22 @@ def mgt_mlt_plot_HTML(
 
     if analysis_type == "MGT":
         plot_data = _prune_mgt_columns(plot_data)
+        plot_data = _normalize_custom_taxonomy_columns(plot_data)
+        legend_palette = tree_palette
+        if legend_palette is None:
+            legend_palette = os.path.join(thisfile_path, "data", "paper_palette.yaml")
+        plot_data = _add_color_group_labels(plot_data, legend_palette)
+    elif "color" in plot_data.columns:
+        plot_data = _add_color_group_labels(plot_data, None)
 
     if "taxname_list_str" in plot_data.columns:
         plot_data["taxstring_tooltip"] = plot_data["taxname_list_str"].apply(_format_taxonomy_tooltip)
     else:
         plot_data["taxstring_tooltip"] = ""
+
+    # Stable row identity lets table selections map back to points without relying on
+    # approximate UMAP coordinate matching.
+    plot_data["_row_id"] = np.arange(len(plot_data), dtype=int)
 
     # Ensure a 'size' column for dynamic updates
     plot_data["size"] = 4  # Default dot size
@@ -1722,6 +2428,42 @@ def mgt_mlt_plot_HTML(
 
     # Add a 'text_color' column based on original_color
     plot_data["text_color"] = plot_data["original_color"].apply(get_text_color)
+
+    side_panel_width = max(340, min(440, int(plot_width * 0.38)))
+    side_input_width = max(104, int((side_panel_width - 32) / 3))
+    side_button_width = 92
+    page_width = int(plot_width) + side_panel_width + 24
+    header_div = bokeh.models.Div(
+        text=_plot_header_html(plot_title, analysis_type, len(plot_data)),
+        width=page_width,
+        sizing_mode="stretch_width",
+    )
+    summary_div = bokeh.models.Div(
+        text=_taxonomy_summary_default_html(plot_data, analysis_type),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    status_div = bokeh.models.Div(
+        text=_selection_status_html("All points", len(plot_data), len(plot_data)),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    search_section_div = bokeh.models.Div(
+        text=_panel_section_html("Search / Highlight", "Filter the table and dim non-matching points."),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    table_section_div = bokeh.models.Div(
+        text=_panel_section_html("Selected Rows", "Rows mirror the active view; row clicks focus points."),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    legend_div = bokeh.models.Div(
+        text=_color_legend_html(plot_data),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    export_state = bokeh.models.ColumnDataSource(data=dict(state=["all"], rows=[len(plot_data)]))
 
     # Determine available taxonomic rank columns for searching
     level_columns = [col for col in plot_data.columns if col.startswith("level_")]
@@ -1771,6 +2513,8 @@ def mgt_mlt_plot_HTML(
     plot.match_aspect = bool(match_aspect)
     if plot.match_aspect:
         plot.aspect_scale = 1
+    plot.min_border_left = 16
+    plot.min_border_right = 16
 
     linked_tree_plot = None
     linked_tree_source = None
@@ -1783,7 +2527,7 @@ def mgt_mlt_plot_HTML(
         linked_tree_leaf_source = tree_bundle["tree_leaf_source"]
 
         tree_figure_kwargs = dict(
-            title="Phylogenetic Tree",
+            title="",
             tools="pan,xwheel_zoom,box_zoom,reset,save",
             width=int(plot_width),
             height=int(tree_height),
@@ -1809,10 +2553,14 @@ def mgt_mlt_plot_HTML(
         )
         linked_tree_plot.xaxis.visible = False
         linked_tree_plot.yaxis.axis_label = "MYA"
+        linked_tree_plot.yaxis.axis_label_text_font_size = "9pt"
+        linked_tree_plot.yaxis.major_label_text_font_size = "8pt"
         linked_tree_plot.grid.visible = False
         linked_tree_plot.outline_line_color = None
         linked_tree_plot.min_border_left = 16
         linked_tree_plot.min_border_right = 16
+        linked_tree_plot.min_border_top = 4
+        linked_tree_plot.min_border_bottom = 0
 
     # Add scatter plot
     scatter = plot.scatter(
@@ -1871,30 +2619,33 @@ def mgt_mlt_plot_HTML(
         plot.add_tools(hover)
 
         # Text input fields for search (placed BELOW the plot)
-        search_rbh   = bokeh.models.TextInput(title="Search RBH Ortholog:")
-        search_group = bokeh.models.TextInput(title="Search Gene Group:")
+        search_rbh   = bokeh.models.TextInput(title="Search RBH Ortholog:", width=side_input_width)
+        search_group = bokeh.models.TextInput(title="Search Gene Group:", width=side_input_width)
         search_taxid = bokeh.models.TextInput(
             title="Highlight taxid(s):",
-            placeholder="e.g. 9606 or 9606, 7227"
+            placeholder="e.g. 9606 or 9606, 7227",
+            width=side_input_width,
         )
         rank_select = bokeh.models.Select(
             title="Taxonomic rank:",
             value=default_rank_value,
             options=rank_select_options,
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
         rank_text = bokeh.models.TextInput(
             title="Highlight text in selected rank:",
             placeholder="substring match",
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
 
         # Button to toggle between OR (||) and AND (&&) search logic
-        search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary")
+        search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary", width=150)
         search_mode   = bokeh.models.Toggle(label="Search Mode")  # False = OR (||), True = AND (&&)
 
         # Button to update the plot based on search terms
-        update_button = bokeh.models.Button(label="Update Plot", button_type="success")
+        update_button = bokeh.models.Button(label="Update Plot", button_type="success", width=side_button_width)
 
         # Dynamically determine the max width needed for RBH column
         max_rbh_length   = max(plot_data["rbh"].astype(str).apply(len))  # Get max string length
@@ -1928,62 +2679,55 @@ def mgt_mlt_plot_HTML(
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=columns,
-            width=int(plot_width), height=300,
+            width=side_panel_width, height=360,
             editable=False,  # Disable editing to avoid conflicts
             selectable=True,  # Enable row selection by clicking on the row
             sizing_mode="stretch_width"
         )
 
         # Button to export the current table dataset
-        export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+        export_button = bokeh.models.Button(label="Export Data", button_type="success", width=side_button_width)
+        clear_button = bokeh.models.Button(label="Clear", button_type="warning", width=72)
         
         # Add a callback to highlight table-selected rows in red on the plot
         table_selection_callback = bokeh.models.CustomJS(args=dict(
             source=source,
             filtered_source=filtered_source,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
         ), code=r"""
-            console.log('Table selection callback triggered');
+""" + _taxonomy_summary_js() + r"""
             var selected_table_rows = filtered_source.selected.indices;
-            console.log('Selected table rows:', selected_table_rows);
             
             // Get the data from both sources
             var source_data = source.data;
             var filtered_data = filtered_source.data;
+            var data = source_data;
             var colors = source_data['color'];
             var sizes = source_data['size'];
             var original_colors = source_data['original_color'];
             var original_sizes = source_data['original_size'];
 
-            console.log('Filtered data length:', filtered_data['UMAP1'].length);
-            console.log('Source data length:', source_data['UMAP1'].length);
-
             // Build a set of all indices that are currently in the table (visible)
             var table_indices = new Set();
-            for (var i = 0; i < filtered_data['UMAP1'].length; i++) {
-                var umap1_val = filtered_data['UMAP1'][i];
-                var umap2_val = filtered_data['UMAP2'][i];
-
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 &&
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        table_indices.add(j);
-                        break;
-                    }
+            for (var i = 0; i < filtered_data['_row_id'].length; i++) {
+                var row_id = Number(filtered_data['_row_id'][i]);
+                if (!Number.isNaN(row_id)) {
+                    table_indices.add(row_id);
                 }
             }
 
-            console.log('Table indices:', Array.from(table_indices));
-
             // If nothing selected in table, restore original colors and sizes for table points only
             if (selected_table_rows.length === 0) {
-                console.log('No rows selected, restoring original colors and sizes for table points only');
                 for (var k = 0; k < colors.length; k++) {
                     if (table_indices.has(k)) {
                         colors[k] = original_colors[k];
                         sizes[k] = original_sizes[k];  // Restore to original size
                     }
                 }
+                renderSelectionSummary(Array.from(table_indices), table_indices.size === colors.length, table_indices.size === colors.length ? 'All points' : 'Shown rows');
                 source.change.emit();
                 return;
             }
@@ -1994,25 +2738,11 @@ def mgt_mlt_plot_HTML(
             // For each selected row in the table, find its corresponding index in source
             for (var i = 0; i < selected_table_rows.length; i++) {
                 var table_row_idx = selected_table_rows[i];
-                
-                // Get unique identifiers from the filtered row
-                var umap1_val = filtered_data['UMAP1'][table_row_idx];
-                var umap2_val = filtered_data['UMAP2'][table_row_idx];
-                
-                console.log('Looking for point at table row', table_row_idx, ':', umap1_val, umap2_val);
-                
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        console.log('Found match at source index:', j);
-                        red_indices.add(j);
-                        break;
-                    }
+                var row_id = Number(filtered_data['_row_id'][table_row_idx]);
+                if (!Number.isNaN(row_id)) {
+                    red_indices.add(row_id);
                 }
             }
-            
-            console.log('Red indices:', Array.from(red_indices));
             
             // Update colors and sizes - set selected rows to red and twice as big
             for (var k = 0; k < colors.length; k++) {
@@ -2027,7 +2757,7 @@ def mgt_mlt_plot_HTML(
                 // If not in table_indices, leave the color/size as-is (stay grey if currently grey)
             }
             
-            console.log('Emitting source change');
+            renderSelectionSummary(Array.from(red_indices), false, 'Table selection');
             source.change.emit();
         """)
         
@@ -2046,6 +2776,10 @@ def mgt_mlt_plot_HTML(
             rank_text=rank_text,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
         ), code=r"""
             var data = source.data;
             var filtered_data = filtered_source.data;
@@ -2063,6 +2797,7 @@ def mgt_mlt_plot_HTML(
             var base_alphas = data['base_alpha'];
             var original_colors = data['original_color'];
             var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
+""" + _taxonomy_summary_js() + r"""
 
             var slider_size = Math.max(size_slider.value, 1);
             var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
@@ -2117,7 +2852,6 @@ def mgt_mlt_plot_HTML(
                 var match = true;
 
                 // Lasso selection overrides other search methods
-                if (use_lasso) {
                 if (use_lasso) {
                     match = lasso_indices.indexOf(i) !== -1;
                 } else {
@@ -2203,6 +2937,7 @@ def mgt_mlt_plot_HTML(
             }
 
             // Update sources
+            renderSelectionSummary(selected_indices, show_all_data, show_all_data ? 'All points' : 'Search results');
             source.selected.indices = selected_indices;
             source.change.emit();
             filtered_source.change.emit();
@@ -2219,13 +2954,23 @@ def mgt_mlt_plot_HTML(
             filtered_source=filtered_source,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            search_rbh=search_rbh,
+            search_group=search_group,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            status_div=status_div,
+            export_state=export_state,
         ), code="""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var lasso_indices = source.selected.indices;
+""" + _taxonomy_summary_js() + """
             
             // Only process if there's an actual lasso selection
             if (lasso_indices.length === 0) return;
+            if (search_rbh.value.trim() !== '' || search_group.value.trim() !== '' || search_taxid.value.trim() !== '' || rank_text.value.trim() !== '') return;
             
             var colors = data['color'];
             var sizes = data['size'];
@@ -2262,6 +3007,7 @@ def mgt_mlt_plot_HTML(
             }
             
             // Update sources (but DON'T modify source.selected.indices)
+            renderSelectionSummary(lasso_indices, false, 'Lasso selection');
             source.change.emit();
             filtered_source.change.emit();
         """)
@@ -2282,13 +3028,25 @@ def mgt_mlt_plot_HTML(
         search_toggle.js_on_event("button_click", update_callback)
 
         # Export Button Callback (Exports highlighted data or full dataset with filename prompt)
-        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
-            var active_data = filtered_source.data['rbh'].length > 0 ? filtered_source.data : source.data;
+        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source, export_state=export_state), code="""
+            var table_has_rows = filtered_source.data['rbh'].length > 0;
+            var active_data = table_has_rows ? filtered_source.data : source.data;
             var keys = Object.keys(active_data);
-            var num_rows = active_data[keys[0]].length;
+            var source_rows = source.data['rbh'].length;
+            var visible_rows = active_data[keys[0]].length;
+            var selected_rows = table_has_rows ? filtered_source.selected.indices.slice() : [];
+            var row_indices = selected_rows.length > 0
+                ? selected_rows
+                : Array.from({length: visible_rows}, function(_, i) { return i; });
 
             // Prompt user for filename
-            var default_filename = (filtered_source.data['rbh'].length > 0) ? "highlighted_data.tsv" : "full_data.tsv";
+            var state = export_state.data['state'][0] || 'all';
+            if (selected_rows.length > 0) {
+                state = 'table_selection';
+            } else if (!table_has_rows || visible_rows === source_rows) {
+                state = 'all';
+            }
+            var default_filename = 'umap_' + state + '_' + row_indices.length + '.tsv';
             var user_filename = prompt("Enter filename for export:", default_filename);
             
             // If user cancels, exit
@@ -2302,16 +3060,17 @@ def mgt_mlt_plot_HTML(
             }
 
             // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "_row_id" && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
 
             // Rename "original_color" to "color"
             var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
 
             var csv_content = renamed_keys.join("\\t") + "\\n"; // Tab-separated column headers
-            for (var i = 0; i < num_rows; i++) {
+            for (var i = 0; i < row_indices.length; i++) {
+                var row_idx = row_indices[i];
                 var row = [];
                 for (var j = 0; j < filtered_keys.length; j++) {
-                    row.push(active_data[filtered_keys[j]][i]);
+                    row.push(active_data[filtered_keys[j]][row_idx]);
                 }
                 csv_content += row.join("\\t") + "\\n";
             }
@@ -2327,6 +3086,60 @@ def mgt_mlt_plot_HTML(
 
         export_button.js_on_event("button_click", export_callback)
 
+        clear_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+            search_rbh=search_rbh,
+            search_group=search_group,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            search_mode=search_mode,
+            search_toggle=search_toggle,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
+        ), code=r"""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+""" + _taxonomy_summary_js() + r"""
+
+            search_rbh.value = "";
+            search_group.value = "";
+            search_taxid.value = "";
+            rank_text.value = "";
+            search_mode.active = false;
+            search_toggle.label = "Search Type: OR (||)";
+            source.selected.indices = [];
+            filtered_source.selected.indices = [];
+
+            var slider_size = Math.max(size_slider.value, 1);
+            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            var colors = data['color'];
+            var sizes = data['size'];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
+            for (var i = 0; i < colors.length; i++) {
+                colors[i] = original_colors[i];
+                sizes[i] = slider_size;
+                alphas[i] = slider_alpha;
+                for (var key in filtered_data) {
+                    filtered_data[key].push(data[key][i]);
+                }
+            }
+
+            renderSelectionSummary([], true, 'All points');
+            source.change.emit();
+            filtered_source.change.emit();
+        """)
+        clear_button.js_on_event("button_click", clear_callback)
+
         # Layout
         layout_kwargs = {}
         row_kwargs = {}
@@ -2339,14 +3152,33 @@ def mgt_mlt_plot_HTML(
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
         search_row = bokeh.layouts.row(
             search_group,
-            search_toggle,
             search_rbh,
+            **row_kwargs,
+        )
+        action_row = bokeh.layouts.row(
+            search_toggle,
             update_button,
+            clear_button,
             export_button,
             align="end",
             **row_kwargs,
         )
-        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, search_row, data_table, **layout_kwargs)
+        left_panel = bokeh.layouts.column(plot, control_row, **layout_kwargs)
+        right_panel = bokeh.layouts.column(
+            status_div,
+            summary_div,
+            search_section_div,
+            taxonomy_row,
+            search_row,
+            action_row,
+            legend_div,
+            table_section_div,
+            data_table,
+            width=side_panel_width,
+            sizing_mode="stretch_width",
+        )
+        body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
+        layout = bokeh.layouts.column(header_div, body_row, sizing_mode="stretch_width")
 
     elif analysis_type == "MGT":
         # Add hover tool with wrapped taxonomy strings for readability
@@ -2378,23 +3210,27 @@ def mgt_mlt_plot_HTML(
 
         search_taxid = bokeh.models.TextInput(
             title="Highlight taxid(s):",
-            placeholder="e.g. 9606 or 9606, 7227"
+            placeholder="e.g. 9606 or 9606, 7227",
+            width=side_input_width,
         )
         rank_select = bokeh.models.Select(
             title="Taxonomic rank:",
             value=default_rank_value,
             options=rank_select_options,
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
         rank_text = bokeh.models.TextInput(
             title="Highlight text in selected rank:",
             placeholder="substring match",
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
-        update_button = bokeh.models.Button(label="Update Plot", button_type="success")
+        update_button = bokeh.models.Button(label="Update Plot", button_type="success", width=side_button_width)
         
         # Button to export the current table dataset
-        export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+        export_button = bokeh.models.Button(label="Export Data", button_type="success", width=side_button_width)
+        clear_button = bokeh.models.Button(label="Clear", button_type="warning", width=72)
 
         # Create table columns for MGT
         mgt_columns = [
@@ -2428,7 +3264,7 @@ def mgt_mlt_plot_HTML(
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=mgt_columns,
-            width=int(plot_width), height=300,
+            width=side_panel_width, height=360,
             editable=False,  # Disable editing to avoid conflicts
             selectable=True,  # Enable row selection by clicking on the row
             sizing_mode="stretch_width"
@@ -2438,49 +3274,41 @@ def mgt_mlt_plot_HTML(
         table_selection_callback = bokeh.models.CustomJS(args=dict(
             source=source,
             filtered_source=filtered_source,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
         ), code="""
-            console.log('Table selection callback triggered (MGT)');
+""" + _taxonomy_summary_js() + """
             var selected_table_rows = filtered_source.selected.indices;
-            console.log('Selected table rows:', selected_table_rows);
             
             // Get the data from both sources
             var source_data = source.data;
             var filtered_data = filtered_source.data;
+            var data = source_data;
             var colors = source_data['color'];
             var sizes = source_data['size'];
             var original_colors = source_data['original_color'];
             var original_sizes = source_data['original_size'];
             
-            console.log('Filtered data length:', filtered_data['UMAP1'].length);
-            console.log('Source data length:', source_data['UMAP1'].length);
-            
             // Build a set of all indices that are currently in the table (visible)
             var table_indices = new Set();
-            for (var i = 0; i < filtered_data['UMAP1'].length; i++) {
-                var umap1_val = filtered_data['UMAP1'][i];
-                var umap2_val = filtered_data['UMAP2'][i];
-                
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        table_indices.add(j);
-                        break;
-                    }
+            for (var i = 0; i < filtered_data['_row_id'].length; i++) {
+                var row_id = Number(filtered_data['_row_id'][i]);
+                if (!Number.isNaN(row_id)) {
+                    table_indices.add(row_id);
                 }
             }
             
-            console.log('Table indices:', Array.from(table_indices));
-            
             // If nothing selected in table, restore original colors and sizes for table points only
             if (selected_table_rows.length === 0) {
-                console.log('No rows selected, restoring original colors and sizes for table points only');
                 for (var k = 0; k < colors.length; k++) {
                     if (table_indices.has(k)) {
                         colors[k] = original_colors[k];
                         sizes[k] = original_sizes[k];  // Restore to original size
                     }
                 }
+                renderSelectionSummary(Array.from(table_indices), table_indices.size === colors.length, table_indices.size === colors.length ? 'All points' : 'Shown rows');
                 source.change.emit();
                 return;
             }
@@ -2491,25 +3319,11 @@ def mgt_mlt_plot_HTML(
             // For each selected row in the table, find its corresponding index in source
             for (var i = 0; i < selected_table_rows.length; i++) {
                 var table_row_idx = selected_table_rows[i];
-                
-                // Get unique identifiers from the filtered row
-                var umap1_val = filtered_data['UMAP1'][table_row_idx];
-                var umap2_val = filtered_data['UMAP2'][table_row_idx];
-                
-                console.log('Looking for point at table row', table_row_idx, ':', umap1_val, umap2_val);
-                
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        console.log('Found match at source index:', j);
-                        red_indices.add(j);
-                        break;
-                    }
+                var row_id = Number(filtered_data['_row_id'][table_row_idx]);
+                if (!Number.isNaN(row_id)) {
+                    red_indices.add(row_id);
                 }
             }
-            
-            console.log('Red indices:', Array.from(red_indices));
             
             // Update colors and sizes - set selected rows to red and twice as big
             for (var k = 0; k < colors.length; k++) {
@@ -2524,7 +3338,7 @@ def mgt_mlt_plot_HTML(
                 // If not in table_indices, leave the color/size as-is (stay grey if currently grey)
             }
             
-            console.log('Emitting source change');
+            renderSelectionSummary(Array.from(red_indices), false, 'Table selection');
             source.change.emit();
         """)
         
@@ -2539,6 +3353,10 @@ def mgt_mlt_plot_HTML(
             rank_text=rank_text,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
         )
         update_callback_args.update(tree_callback_args)
         update_callback_js = r"""
@@ -2552,6 +3370,7 @@ def mgt_mlt_plot_HTML(
             var original_colors = data['original_color'];
             var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
 /*TREE_SYNC_HELPER*/
+/*SUMMARY_HELPER*/
 
             var taxid_raw = search_taxid.value.trim();
             var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
@@ -2601,6 +3420,7 @@ def mgt_mlt_plot_HTML(
                 
                 source.change.emit();
                 filtered_source.change.emit();
+                renderSelectionSummary([], true, 'All points');
 /*TREE_SYNC_RESET*/
                 return;
             }
@@ -2701,11 +3521,13 @@ def mgt_mlt_plot_HTML(
             }
 
 /*TREE_SYNC_APPLY*/
+            renderSelectionSummary(selected_indices, show_all_data, show_all_data ? 'All points' : 'Search results');
             source.selected.indices = selected_indices;
             source.change.emit();
             filtered_source.change.emit();
         """
         update_callback_js = update_callback_js.replace("/*TREE_SYNC_HELPER*/", tree_sync_js)
+        update_callback_js = update_callback_js.replace("/*SUMMARY_HELPER*/", _taxonomy_summary_js())
         update_callback_js = update_callback_js.replace("/*TREE_SYNC_RESET*/", tree_reset_js)
         update_callback_js = update_callback_js.replace("/*TREE_SYNC_APPLY*/", tree_apply_js)
         update_callback = bokeh.models.CustomJS(args=update_callback_args, code=update_callback_js)
@@ -2721,16 +3543,24 @@ def mgt_mlt_plot_HTML(
             filtered_source=filtered_source,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            status_div=status_div,
+            export_state=export_state,
         )
         lasso_callback_args.update(tree_callback_args)
         lasso_callback_js = """
             var data = source.data;
             var filtered_data = filtered_source.data;
             var lasso_indices = source.selected.indices;
+""" + _taxonomy_summary_js() + """
 """ + tree_sync_js + """
             
             // Only process if there's an actual lasso selection
             if (lasso_indices.length === 0) return;
+            if (search_taxid.value.trim() !== '' || rank_text.value.trim() !== '') return;
             
             var colors = data['color'];
             var sizes = data['size'];
@@ -2768,6 +3598,7 @@ def mgt_mlt_plot_HTML(
             
             // Update sources (but DON'T modify source.selected.indices)
 """ + tree_lasso_js + """
+            renderSelectionSummary(lasso_indices, false, 'Lasso selection');
             source.change.emit();
             filtered_source.change.emit();
         """
@@ -2776,13 +3607,25 @@ def mgt_mlt_plot_HTML(
         source.selected.js_on_change("indices", lasso_callback)
 
         # Export Button Callback with filename prompt
-        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
-            var active_data = filtered_source.data['sample'].length > 0 ? filtered_source.data : source.data;
+        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source, export_state=export_state), code="""
+            var table_has_rows = filtered_source.data['sample'].length > 0;
+            var active_data = table_has_rows ? filtered_source.data : source.data;
             var keys = Object.keys(active_data);
-            var num_rows = active_data[keys[0]].length;
+            var source_rows = source.data['sample'].length;
+            var visible_rows = active_data[keys[0]].length;
+            var selected_rows = table_has_rows ? filtered_source.selected.indices.slice() : [];
+            var row_indices = selected_rows.length > 0
+                ? selected_rows
+                : Array.from({length: visible_rows}, function(_, i) { return i; });
 
             // Prompt user for filename
-            var default_filename = (filtered_source.data['sample'].length > 0 && filtered_source.data['sample'].length < source.data['sample'].length) ? "highlighted_data.tsv" : "full_data.tsv";
+            var state = export_state.data['state'][0] || 'all';
+            if (selected_rows.length > 0) {
+                state = 'table_selection';
+            } else if (!table_has_rows || visible_rows === source_rows) {
+                state = 'all';
+            }
+            var default_filename = 'umap_' + state + '_' + row_indices.length + '.tsv';
             var user_filename = prompt("Enter filename for export:", default_filename);
             
             // If user cancels, exit
@@ -2796,16 +3639,17 @@ def mgt_mlt_plot_HTML(
             }
 
             // Remove unwanted columns
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "_row_id" && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
 
             // Rename "original_color" to "color"
             var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
 
             var csv_content = renamed_keys.join("\\t") + "\\n";
-            for (var i = 0; i < num_rows; i++) {
+            for (var i = 0; i < row_indices.length; i++) {
+                var row_idx = row_indices[i];
                 var row = [];
                 for (var j = 0; j < filtered_keys.length; j++) {
-                    row.push(active_data[filtered_keys[j]][i]);
+                    row.push(active_data[filtered_keys[j]][row_idx]);
                 }
                 csv_content += row.join("\\t") + "\\n";
             }
@@ -2821,6 +3665,56 @@ def mgt_mlt_plot_HTML(
         
         export_button.js_on_event("button_click", export_callback)
 
+        clear_callback_args = dict(
+            source=source,
+            filtered_source=filtered_source,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
+        )
+        clear_callback_args.update(tree_callback_args)
+        clear_callback_js = r"""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+""" + tree_sync_js + _taxonomy_summary_js() + r"""
+
+            search_taxid.value = "";
+            rank_text.value = "";
+            source.selected.indices = [];
+            filtered_source.selected.indices = [];
+
+            var slider_size = Math.max(size_slider.value, 1);
+            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            var colors = data['color'];
+            var sizes = data['size'];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
+            for (var i = 0; i < colors.length; i++) {
+                colors[i] = original_colors[i];
+                sizes[i] = slider_size;
+                alphas[i] = slider_alpha;
+                for (var key in filtered_data) {
+                    filtered_data[key].push(data[key][i]);
+                }
+            }
+
+""" + tree_reset_js + r"""
+            renderSelectionSummary([], true, 'All points');
+            source.change.emit();
+            filtered_source.change.emit();
+        """
+        clear_callback = bokeh.models.CustomJS(args=clear_callback_args, code=clear_callback_js)
+        clear_button.js_on_event("button_click", clear_callback)
+
         layout_kwargs = {}
         row_kwargs = {}
         if plot_sizing_mode and plot_sizing_mode != "fixed":
@@ -2829,18 +3723,33 @@ def mgt_mlt_plot_HTML(
                 row_kwargs["sizing_mode"] = "stretch_width"
 
         control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button, export_button, **row_kwargs)
-        layout_children = [plot, control_row, taxonomy_row, data_table]
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
+        action_row = bokeh.layouts.row(update_button, clear_button, export_button, align="end", **row_kwargs)
+        left_children = [plot, control_row]
         if linked_tree_plot is not None:
-            layout_children.insert(0, linked_tree_plot)
-        layout = bokeh.layouts.column(*layout_children, **layout_kwargs)
+            left_children.insert(0, linked_tree_plot)
+        left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
+        right_panel = bokeh.layouts.column(
+            status_div,
+            summary_div,
+            search_section_div,
+            taxonomy_row,
+            action_row,
+            legend_div,
+            table_section_div,
+            data_table,
+            width=side_panel_width,
+            sizing_mode="stretch_width",
+        )
+        body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
+        layout = bokeh.layouts.column(header_div, body_row, sizing_mode="stretch_width")
 
     # Store the IDs for later reference in auto-init script
     source_id = source.id if filtered_source is not None else None
     filtered_source_id = filtered_source.id if filtered_source is not None else None
 
     # Output to HTML
-    bokeh.plotting.output_file(outhtml)
+    bokeh.plotting.output_file(outhtml, title=plot_title, mode="inline")
     bokeh.io.save(layout)
     
     # Auto-populate the table on page load by injecting JavaScript into the HTML
@@ -2854,34 +3763,26 @@ def mgt_mlt_plot_HTML(
     <script type="text/javascript">
     // Auto-populate table on page load (without embedding duplicate data)
     (function() {{
-        console.log('Auto-init script loaded');
         var retryCount = 0;
         var maxRetries = 100; // Max 5 seconds of retries (100 * 50ms)
         
         function initTable() {{
             retryCount++;
-            console.log('initTable attempt', retryCount, '- checking for Bokeh objects');
             
             if (typeof Bokeh !== 'undefined' && Bokeh.index && Bokeh.index["{source_id}"] && Bokeh.index["{filtered_source_id}"]) {{
                 try {{
-                    console.log('Bokeh objects found, initializing table');
                     var source = Bokeh.index["{source_id}"];
                     var filtered_source = Bokeh.index["{filtered_source_id}"];
-                    
-                    console.log('Source data length:', Object.keys(source.data).length);
-                    console.log('Source UMAP1 length:', source.data['UMAP1'].length);
                     
                     // Copy all data from source to filtered_source
                     for (var key in source.data) {{
                         filtered_source.data[key] = source.data[key].slice();
                     }}
                     filtered_source.change.emit();
-                    console.log("Table initialized successfully with", filtered_source.data['UMAP1'].length, "rows");
                 }} catch (e) {{
                     console.error("Error initializing table:", e);
                 }}
             }} else {{
-                console.log('Bokeh objects not ready yet');
                 if (retryCount < maxRetries) {{
                     // Bokeh objects not ready yet, try again
                     setTimeout(initTable, 50);
@@ -2892,22 +3793,22 @@ def mgt_mlt_plot_HTML(
         }}
         
         // Wait for page to fully load
-        console.log('Document readyState:', document.readyState);
         if (document.readyState === 'loading') {{
-            console.log('Waiting for DOMContentLoaded');
             document.addEventListener('DOMContentLoaded', function() {{
-                console.log('DOMContentLoaded fired, starting init in 200ms');
                 setTimeout(initTable, 200);
             }});
         }} else {{
-            console.log('Document already loaded, starting init in 200ms');
             setTimeout(initTable, 200);
         }}
     }})();
     </script>
 </body>"""
         
-        html_content = html_content.replace('</body>', init_script)
+        before_body, closing_body, after_body = html_content.rpartition('</body>')
+        if closing_body:
+            html_content = before_body + init_script + after_body
+        else:
+            html_content += init_script
         
         with open(outhtml, 'w', encoding='utf-8') as f:
             f.write(html_content)
@@ -5052,7 +5953,7 @@ def main(argv=None):
     p.add_argument("--no-match-aspect", action="store_true", help="Disable locked aspect ratio.")
     p.add_argument("--tree-newick", default=None, help="Optional collapsed calibrated Newick to render above the UMAP (MGT only).")
     p.add_argument("--tree-palette", default=None, help="Optional palette YAML for linked tree coloring (defaults to bundled paper_palette.yaml).")
-    p.add_argument("--tree-height", type=int, default=260, help="Height in pixels of the linked tree panel when enabled.")
+    p.add_argument("--tree-height", type=int, default=150, help="Height in pixels of the linked tree panel when enabled.")
     p.set_defaults(func=_cmd_plot_html)
 
     args = parser.parse_args(argv)

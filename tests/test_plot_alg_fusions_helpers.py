@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from egt.custom_taxonomy import CustomTopologyWarning
 from egt import plot_alg_fusions as paf
 
 
@@ -175,18 +176,33 @@ def test_phylogeny_and_lineage_image_helpers(monkeypatch):
                 101: [1, 33208, 10197, 101],
                 201: [1, 33208, 6040, 201],
                 301: [1, 2759, 301],
+                401: [1, 33208, 6072, 33213, 401],
             }
             return mapping[taxid]
 
     monkeypatch.setattr(paf, "NCBITaxa", lambda: FakeNCBI())
 
-    assert paf.apply_custom_phylogeny([1, 33208, 6072, 10197, 101], 101, None) == [1, 33208, 10197, 101]
-    assert paf.apply_custom_phylogeny([1, 33208, 6072, 201], 201, None) == [1, 33208, -67, 6072, 201]
+    with pytest.warns(CustomTopologyWarning, match="Eumetazoa"):
+        assert paf.apply_custom_phylogeny([1, 33208, 6072, 10197, 101], 101, None) == [1, 33208, 10197, 101]
+    assert paf.apply_custom_phylogeny([1, 33208, 6040, 201], 201, None) == [1, 33208, -67, 6040, 201]
+    with pytest.warns(CustomTopologyWarning, match="Eumetazoa"):
+        assert paf.apply_custom_phylogeny([1, 33208, 6072, 33213, 401], 401, None) == [
+            1,
+            33208,
+            -67,
+            -68,
+            33213,
+            401,
+        ]
+    with pytest.warns(CustomTopologyWarning, match="Eumetazoa"):
+        assert paf.apply_custom_phylogeny([1, 33208, 6072, 501], 501, None) == [1, 33208, -67, -68, 501]
 
-    taxidstrings = paf.taxids_to_taxidstringdict([101, 201, 301], use_custom_phylogeny=True)
+    with pytest.warns(CustomTopologyWarning, match="Eumetazoa"):
+        taxidstrings = paf.taxids_to_taxidstringdict([101, 201, 301, 401], use_custom_phylogeny=True)
     assert taxidstrings[101] == "1;33208;10197;101"
     assert taxidstrings[201] == "1;33208;-67;6040;201"
     assert taxidstrings[301] == "1;2759;301"
+    assert taxidstrings[401] == "1;33208;-67;-68;33213;401"
 
     image = paf.image_sp_matrix_to_lineage(
         [

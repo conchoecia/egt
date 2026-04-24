@@ -89,3 +89,5 @@ env/
 .coverage.*
 coverage.xml
 htmlcov/
+
+*_HANDOFF.md

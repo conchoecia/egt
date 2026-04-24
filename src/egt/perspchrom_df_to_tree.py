@@ -248,7 +248,7 @@ def safe_get_taxid_translator(ncbi, taxids):
     """
     Get taxid names from NCBI, handling custom negative taxids used in custom phylogeny.
     Custom taxids:
-      -67: Myriazoa (Porifera + Eumetazoa, sister to Ctenophora)
+      -67: Myriazoa (Porifera + Parahoxozoa, sister to Ctenophora)
       -68: Parahoxozoa (Placozoa/Cnidaria + Bilateria)
     
     Args:

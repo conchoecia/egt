@@ -228,6 +228,10 @@ sys.path.insert(1, source_path)
 from egt import rbh_tools
 
 from egt.taxid_tools import NCBI_taxid_to_taxdict
+from egt.custom_taxonomy import (
+    CustomTopologyWarning,
+    apply_custom_animal_topology_to_taxid_lineage,
+)
 
 # import the stuff to work with lineages
 from ete4 import NCBITaxa,Tree
@@ -235,6 +239,7 @@ from ete4 import NCBITaxa,Tree
 # get the warnings
 import warnings
 warnings.filterwarnings('error')
+warnings.filterwarnings("default", category=CustomTopologyWarning)
 
 # plotting options
 import matplotlib.pyplot as plt
@@ -515,22 +520,23 @@ def plot_ALG_fusions(Fusion_df, ALG_df, ALGname, outprefix=None):
 def apply_custom_phylogeny(lineage, taxid, ncbi):
     """
     Apply custom phylogenetic placement that differs from NCBI taxonomy.
-    
+
     CUSTOM TOPOLOGY:
     ================
     This function implements the following alternative animal phylogeny:
-    
+
     Metazoa (33208)
-    ├─ Myriazoa (-67) [CUSTOM NODE - not in NCBI]
-    │  ├─ Porifera (6040)
-    │  └─ Eumetazoa (6072)
-    │     ├─ Cnidaria (6073)
-    │     └─ [other Eumetazoa]
-    └─ Ctenophora (10197) [MOVED - sister to Myriazoa]
-    
+    |-- Ctenophora (10197) [MOVED - sister to Myriazoa]
+    `-- Myriazoa (-67) [CUSTOM NODE - not in NCBI]
+        |-- Porifera (6040)
+        `-- Parahoxozoa (-68) [CUSTOM NODE - not in NCBI]
+            |-- Cnidaria (6073)
+            |-- Placozoa (10226)
+            `-- Bilateria (33213)
+
     In NCBI, Ctenophora is nested within Eumetazoa (6072), but phylogenomic
     evidence suggests they are sister to all other animals (Schultz et al. 2023).
-    
+
     Parameters:
     -----------
     lineage : list
@@ -543,50 +549,17 @@ def apply_custom_phylogeny(lineage, taxid, ncbi):
     Returns:
     --------
     list : Modified lineage with custom phylogenetic placement
-    
+
     Notes:
     ------
-    - Myriazoa (-67) is a fake taxid representing Porifera + Eumetazoa
+    - Myriazoa (-67) is a fake taxid representing Porifera + Parahoxozoa
+    - Parahoxozoa (-68) is a fake taxid representing Cnidaria/Placozoa + Bilateria
+    - Eumetazoa (6072) is removed from returned lineages
     - Negative taxids will not conflict with real NCBI taxids (all positive)
     - The function checks if taxid is Ctenophora or descendant thereof
-    - If not Ctenophora-related, checks if taxid is Porifera/Eumetazoa/descendants
+    - If not Ctenophora-related, checks if taxid is Porifera/Parahoxozoa/descendants
     """
-    CTENOPHORA_TAXID = 10197
-    EUMETAZOA_TAXID = 6072
-    PORIFERA_TAXID = 6040
-    METAZOA_TAXID = 33208
-    MYRIAZOA_TAXID = -67  # Custom fake taxid for Porifera + Eumetazoa clade
-    
-    # Check if this taxid is Ctenophora or a descendant
-    if CTENOPHORA_TAXID in lineage:
-        # Find where Metazoa is in the lineage
-        if METAZOA_TAXID in lineage:
-            metazoa_index = lineage.index(METAZOA_TAXID)
-            # Build custom lineage: [root...Metazoa, Ctenophora, ...descendants]
-            # Remove any intermediate nodes between Metazoa and Ctenophora
-            new_lineage = lineage[:metazoa_index + 1]  # Everything up to and including Metazoa
-            
-            # Find the position of Ctenophora in original lineage
-            cteno_index = lineage.index(CTENOPHORA_TAXID)
-            # Add everything from Ctenophora onwards
-            new_lineage.extend(lineage[cteno_index:])
-            return new_lineage
-    
-    # Check if this taxid is Porifera, Eumetazoa, or descendants thereof
-    elif PORIFERA_TAXID in lineage or EUMETAZOA_TAXID in lineage:
-        # Find where Metazoa is in the lineage
-        if METAZOA_TAXID in lineage:
-            metazoa_index = lineage.index(METAZOA_TAXID)
-            # Build custom lineage: [root...Metazoa, Myriazoa, Porifera/Eumetazoa, ...descendants]
-            new_lineage = lineage[:metazoa_index + 1]  # Everything up to and including Metazoa
-            new_lineage.append(MYRIAZOA_TAXID)  # Insert fake Myriazoa node
-            
-            # Add the rest of the lineage after Metazoa
-            new_lineage.extend(lineage[metazoa_index + 1:])
-            return new_lineage
-    
-    # For all other taxa, return original lineage unchanged
-    return lineage
+    return apply_custom_animal_topology_to_taxid_lineage(lineage)
 
 
 def taxids_to_taxidstringdict(taxids, use_custom_phylogeny=True) -> dict:
@@ -605,8 +578,10 @@ def taxids_to_taxidstringdict(taxids, use_custom_phylogeny=True) -> dict:
     Notes:
     ------
     When use_custom_phylogeny=True:
-    - Ctenophora (10197) is placed as sister to Myriazoa (Porifera + Eumetazoa)
+    - Ctenophora (10197) is placed as sister to Myriazoa
     - Myriazoa is represented by fake taxid -67
+    - Parahoxozoa is represented by fake taxid -68
+    - Eumetazoa (6072) is removed from returned lineage strings
     - This reflects the phylogenomic hypothesis from Schultz et al. (2023) Nature
     """
     ncbi = NCBITaxa()
@@ -644,11 +619,11 @@ def image_sp_matrix_to_lineage(taxidstring) -> Image:
       - import numpy as np
 
     This takes a list called taxidstring. The taxidstrings will be taxids delimited with a semicolon.
-        1;131567;2759;33154;33208;6072;33213;33317;120...
-        1;131567;2759;33154;33208;6072;33213;33317;120...
-        1;131567;2759;33154;33208;6072;33213;33317;120...
-        1;131567;2759;33154;33208;6072;33213;33317;120...
-        1;131567;2759;33154;33208;6072;33213;33317;120...
+        1;131567;2759;33154;33208;-67;-68;33213;33317;120...
+        1;131567;2759;33154;33208;-67;-68;33213;33317;120...
+        1;131567;2759;33154;33208;-67;-68;33213;33317;120...
+        1;131567;2759;33154;33208;-67;-68;33213;33317;120...
+        1;131567;2759;33154;33208;-67;-68;33213;33317;120...
     Algorithm:
       - This will first go through all of the taxid strings and figure out the longest one.
       - Then it will construct an image where each row is a species, and each pixel is a taxid.
@@ -1171,7 +1146,7 @@ def load_calibrated_tree(node_info_file):
     dict : Dictionary with two keys:
         'lineages' : dict mapping taxid (int) -> lineage_string (str)
             Where lineage_string is semicolon-delimited taxid path from root to tip
-            Example: "1;131567;2759;33154;33208;-67;6072;33213;7711;9606"
+            Example: "1;131567;2759;33154;33208;-67;-68;33213;7711;9606"
         'ages' : dict mapping taxid (int) -> nodeage (float)
             Where nodeage is the divergence time in millions of years ago (MYA)
             Only includes internal nodes that have calibrated ages
