@@ -114,6 +114,59 @@ def test_plot_phyla_writes_clean_and_annotation_outputs(tmp_path: Path):
     assert (tmp_path / "phyla_clean.pdf").exists()
 
 
+def test_plot_phyla_manuscript_clean_uses_same_canvas(tmp_path: Path, monkeypatch):
+    df = pd.DataFrame(
+        {
+            "rbh": [f"r{i}" for i in range(12)],
+            "UMAP1": [float(i % 4) for i in range(12)],
+            "UMAP2": [float(i // 4) for i in range(12)],
+            "taxid_list_str": [
+                "1;2759;33154;33208;33213;33511;7711;40674",
+                "1;2759;33154;33208;33213;33511;7711;8782",
+                "1;2759;33154;33208;33213;33511;7711;8509",
+                "1;2759;33154;33208;33213;33317;6656;7088",
+                "1;2759;33154;33208;33213;33317;6656",
+                "1;2759;33154;33208;33213;33317;2697495",
+                "1;2759;33154;33208;6040",
+                "1;2759;33154;33208;6073",
+                "1;2759;33154;33208;10197",
+                "1;2759;33154;33208;33213;33511;7586",
+                "1;2759;33154;33208;6040",
+                "1;2759;33154;33208;6073",
+            ],
+            "color": ["#111111"] * 12,
+        }
+    )
+    infile = tmp_path / "manuscript.tsv"
+    df.to_csv(infile, sep="\t")
+
+    savefig_calls = []
+
+    def fake_savefig(self, fname, *args, **kwargs):
+        savefig_calls.append((Path(fname).name, kwargs))
+        Path(fname).write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(plotdfs.plt.Figure, "savefig", fake_savefig)
+
+    args = SimpleNamespace(
+        filelist=str(infile),
+        phyla_order=None,
+        phyla_rotation="maximize_square",
+        num_cols=2,
+        phyla_clean_output=True,
+        color_source="df",
+        palette=None,
+        recolored_df_out=None,
+        phyla_manuscript_layout=True,
+        main_panel_side_buffer=0.10,
+    )
+    outpdf = tmp_path / "phyla.pdf"
+    plotdfs.plot_phyla(args, str(outpdf))
+
+    assert [call[0] for call in savefig_calls] == ["phyla.pdf", "phyla_clean.pdf"]
+    assert all("bbox_inches" not in kwargs for _, kwargs in savefig_calls)
+
+
 def test_plot_phyla_recolors_from_palette_and_writes_recolored_df(tmp_path: Path):
     df = pd.DataFrame(
         {

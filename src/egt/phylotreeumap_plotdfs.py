@@ -1805,13 +1805,13 @@ def plot_phyla(args, outpdf, metadata_df=None):
 
         print(f"Saving manuscript phyla plot to {outpdf}")
         fig = create_manuscript_figure(include_labels=True, include_grid=True, include_vectors=True)
-        fig.savefig(outpdf, bbox_inches="tight")
+        fig.savefig(outpdf)
         plt.close(fig)
         if args.phyla_clean_output:
             clean_outpdf = outpdf.replace(".pdf", "_clean.pdf")
             print(f"Saving clean manuscript phyla plot to {clean_outpdf}")
             fig_clean = create_manuscript_figure(include_labels=False, include_grid=False, include_vectors=False)
-            fig_clean.savefig(clean_outpdf, bbox_inches="tight")
+            fig_clean.savefig(clean_outpdf)
             plt.close(fig_clean)
         return
     
