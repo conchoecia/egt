@@ -222,6 +222,10 @@ def parse_args(argv=None):
                           "cols=(n_neighbors,min_dist) inferred from filenames)."))
     parser.add_argument("--num-cols", type=int, default=None,
                         help="Number of columns for --plot_features or --plot-phyla grid layout. If not specified, uses sqrt of total panels (square grid).")
+    parser.add_argument("--phyla-manuscript-layout", action="store_true",
+                        help="For --plot-phyla, render the manuscript 4x4 all-samples panel plus a 3x4 right-side clade panel layout.")
+    parser.add_argument("--main-panel-side-buffer", type=float, default=0.10,
+                        help="Extra x-axis padding fraction for the large panel in --phyla-manuscript-layout (default: 0.10).")
 
     args = parser.parse_args(argv)
 
@@ -1613,6 +1617,203 @@ def plot_phyla(args, outpdf, metadata_df=None):
         use_square_panels = True
         panel_aspect_ratio = 1.0
         print(f"  Using square panels")
+
+    if getattr(args, "phyla_manuscript_layout", False):
+        clades = [
+            ("Deuterostomia", lambda tx: 33511 in tx),
+            ("Protostomia", lambda tx: 33317 in tx),
+            ("Non-Bilateria", lambda tx: 33208 in tx and 33213 not in tx),
+            ("Birds + lizards", lambda tx: 8782 in tx or 8509 in tx),
+            ("Arthropoda", lambda tx: 6656 in tx),
+            ("Porifera", lambda tx: 6040 in tx),
+            ("Mammalia", lambda tx: 40674 in tx),
+            ("Lepidoptera", lambda tx: 7088 in tx),
+            ("Cnidaria", lambda tx: 6073 in tx),
+            ("Non-chordate\ndeuterostomes", lambda tx: 33511 in tx and 7711 not in tx),
+            ("Spiralia", lambda tx: 2697495 in tx),
+            ("Ctenophora", lambda tx: 10197 in tx),
+        ]
+        clade_keys = []
+        for label, predicate in clades:
+            key = label.replace("\n", " ")
+            clade_keys.append(key)
+            df[f"_is_{key}"] = df["_lineage_taxids"].apply(predicate)
+            print(f"  - {key}: {int(df[f'_is_{key}'].sum())} samples")
+
+        cell_w = 1.45
+        cell_h = 1.45
+        gap = 0.18
+        margin_l = 0.45
+        margin_r = 0.20
+        margin_b = 0.35
+        margin_t = 0.35
+        num_cols = 7
+        num_rows = 4
+        fig_width = margin_l + margin_r + num_cols * cell_w + (num_cols - 1) * gap
+        fig_height = margin_b + margin_t + num_rows * cell_h + (num_rows - 1) * gap
+
+        def add_cell_axes(fig_new, row, col, rowspan=1, colspan=1):
+            left = margin_l + col * (cell_w + gap)
+            bottom = fig_height - margin_t - (row + rowspan) * cell_h - row * gap - (rowspan - 1) * gap
+            width = colspan * cell_w + (colspan - 1) * gap
+            height = rowspan * cell_h + (rowspan - 1) * gap
+            return fig_new.add_axes([left / fig_width, bottom / fig_height, width / fig_width, height / fig_height])
+
+        def set_main_limits_with_side_buffer(ax):
+            set_square_limits(ax, df["UMAP1"], df["UMAP2"], q=None, pad=0.01)
+            x0, x1 = ax.get_xlim()
+            y0, y1 = ax.get_ylim()
+            xpad = max(0.0, float(getattr(args, "main_panel_side_buffer", 0.10))) * (x1 - x0)
+            ax.set_xlim(x0 - xpad, x1 + xpad)
+            new_width = (x1 - x0) + 2 * xpad
+            y_mid = (y0 + y1) / 2
+            ax.set_ylim(y_mid - new_width / 2, y_mid + new_width / 2)
+            ax.set_aspect("equal", adjustable="box")
+
+        def create_manuscript_figure(include_labels=True, include_grid=True, include_vectors=True):
+            fig_new = plt.figure(figsize=(fig_width, fig_height), facecolor="white")
+            ax_large = add_cell_axes(fig_new, 0, 0, rowspan=4, colspan=4)
+            ax_large.scatter(
+                df["UMAP1"],
+                df["UMAP2"],
+                s=0.95 * 16,
+                lw=0,
+                alpha=0.58,
+                color=df["color"],
+            )
+            set_main_limits_with_side_buffer(ax_large)
+            ax_large.set_xticks([])
+            ax_large.set_yticks([])
+            for spine in ax_large.spines.values():
+                spine.set_visible(False)
+            if include_labels:
+                ax_large.text(
+                    0.5,
+                    1.0,
+                    "All samples",
+                    transform=ax_large.transAxes,
+                    ha="center",
+                    va="top",
+                    fontsize=12,
+                    fontweight="bold",
+                )
+            if include_vectors:
+                xlim = ax_large.get_xlim()
+                ylim = ax_large.get_ylim()
+                arrow_scale = 0.12 * min(xlim[1] - xlim[0], ylim[1] - ylim[0])
+                arrow_origin_x = xlim[0] + 0.10 * (xlim[1] - xlim[0])
+                arrow_origin_y = ylim[0] + 0.10 * (ylim[1] - ylim[0])
+                ax_large.arrow(
+                    arrow_origin_x,
+                    arrow_origin_y,
+                    original_x_axis[0] * arrow_scale,
+                    original_x_axis[1] * arrow_scale,
+                    head_width=arrow_scale * 0.12,
+                    head_length=arrow_scale * 0.18,
+                    fc="red",
+                    ec="red",
+                    alpha=0.7,
+                    lw=1.2,
+                )
+                ax_large.arrow(
+                    arrow_origin_x,
+                    arrow_origin_y,
+                    original_y_axis[0] * arrow_scale,
+                    original_y_axis[1] * arrow_scale,
+                    head_width=arrow_scale * 0.12,
+                    head_length=arrow_scale * 0.18,
+                    fc="blue",
+                    ec="blue",
+                    alpha=0.7,
+                    lw=1.2,
+                )
+                ax_large.text(
+                    arrow_origin_x + original_x_axis[0] * arrow_scale * 1.25,
+                    arrow_origin_y + original_x_axis[1] * arrow_scale * 1.25,
+                    "UMAP1",
+                    fontsize=7,
+                    color="red",
+                    ha="center",
+                    va="center",
+                )
+                ax_large.text(
+                    arrow_origin_x + original_y_axis[0] * arrow_scale * 1.25,
+                    arrow_origin_y + original_y_axis[1] * arrow_scale * 1.25,
+                    "UMAP2",
+                    fontsize=7,
+                    color="blue",
+                    ha="center",
+                    va="center",
+                )
+
+            for idx, (label, _) in enumerate(clades):
+                row = idx // 3
+                col = 4 + (idx % 3)
+                key = clade_keys[idx]
+                mask = df[f"_is_{key}"].to_numpy(bool)
+                ax = add_cell_axes(fig_new, row, col)
+                ax.scatter(
+                    df.loc[~mask, "UMAP1"],
+                    df.loc[~mask, "UMAP2"],
+                    s=0.75,
+                    lw=0,
+                    alpha=0.28,
+                    color=GREY_COLOR,
+                    zorder=1,
+                )
+                ax.scatter(
+                    df.loc[mask, "UMAP1"],
+                    df.loc[mask, "UMAP2"],
+                    s=1.6,
+                    lw=0,
+                    alpha=0.82,
+                    color=df.loc[mask, "color"],
+                    zorder=2,
+                )
+                set_square_limits(ax, df["UMAP1"], df["UMAP2"], q=None, pad=0.01)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+                if include_labels:
+                    ax.text(
+                        0.5,
+                        1.0,
+                        f"{label}\nn = {int(mask.sum())}",
+                        transform=ax.transAxes,
+                        fontsize=7,
+                        ha="center",
+                        va="top",
+                        multialignment="center",
+                    )
+
+            if include_grid:
+                line_color = "#BBBBBB"
+                x_left_right_panel = (margin_l + 4 * cell_w + 3.5 * gap) / fig_width
+                x_right = 1 - margin_r / fig_width
+                y_bottom = margin_b / fig_height
+                y_top = 1 - margin_t / fig_height
+                for col in range(5, num_cols):
+                    x = (margin_l + col * cell_w + (col - 0.5) * gap) / fig_width
+                    fig_new.add_artist(plt.Line2D([x, x], [y_bottom, y_top], transform=fig_new.transFigure, color=line_color, lw=0.8))
+                for row in range(1, num_rows):
+                    y = (margin_b + (num_rows - row) * cell_h + (num_rows - row - 0.5) * gap) / fig_height
+                    fig_new.add_artist(plt.Line2D([x_left_right_panel, x_right], [y, y], transform=fig_new.transFigure, color=line_color, lw=0.8))
+                fig_new.add_artist(plt.Line2D([x_left_right_panel, x_left_right_panel], [y_bottom, y_top], transform=fig_new.transFigure, color=line_color, lw=0.8))
+
+            return fig_new
+
+        print(f"Saving manuscript phyla plot to {outpdf}")
+        fig = create_manuscript_figure(include_labels=True, include_grid=True, include_vectors=True)
+        fig.savefig(outpdf, bbox_inches="tight")
+        plt.close(fig)
+        if args.phyla_clean_output:
+            clean_outpdf = outpdf.replace(".pdf", "_clean.pdf")
+            print(f"Saving clean manuscript phyla plot to {clean_outpdf}")
+            fig_clean = create_manuscript_figure(include_labels=False, include_grid=False, include_vectors=False)
+            fig_clean.savefig(clean_outpdf, bbox_inches="tight")
+            plt.close(fig_clean)
+        return
     
     all_panel_span = max(1, int(getattr(args, "all_panel_span", 2)))
 
