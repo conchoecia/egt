@@ -1679,36 +1679,16 @@ _UI_WARN = "#b7791f"
 _UI_RULE = "#c8c2b5"
 _UI_CHIP_HOVER = "#efeadf"
 
+# Internal scope keys used by Export to label the file and pick the rows.
+# These are derived automatically from selection state; users no longer
+# pick them via a UI toggle (the previous scope switcher buttons were
+# confusing and redundant with the auto-detection in the Export callback).
 _SCOPE_KEYS = (
     ("all", "All"),
     ("search_results", "Filtered"),
     ("lasso_selection", "Lasso"),
     ("table_selection", "Table"),
 )
-
-
-def _scope_switcher_html(active_key="all"):
-    """Inline scope toggle pill row embedded in the active-view banner."""
-    buttons = []
-    for key, label in _SCOPE_KEYS:
-        is_active = (key == active_key)
-        bg = _UI_ACCENT if is_active else "transparent"
-        fg = "#ffffff" if is_active else _UI_ACCENT_FG
-        border = _UI_ACCENT if is_active else _UI_RULE
-        buttons.append(
-            f'<button type="button" data-scope-key="{key}" '
-            f'class="egt-scope-btn{ " active" if is_active else ""}" '
-            f'style="all:unset;cursor:pointer;padding:3px 10px;border-radius:999px;'
-            f'border:1px solid {border};background:{bg};color:{fg};'
-            f'font-family:{_UI_FONT_SANS};font-size:11px;font-weight:600;'
-            f'letter-spacing:.03em;">{html.escape(label)}</button>'
-        )
-    return (
-        '<span class="egt-scope-switcher" style="display:inline-flex;gap:6px;'
-        'margin-left:12px;vertical-align:middle;">'
-        + "".join(buttons)
-        + "</span>"
-    )
 
 
 def _taxonomy_summary_default_html(plot_data, analysis_type):
@@ -1843,8 +1823,7 @@ def _selection_status_html(scope, shown, total, active_scope_key="all"):
         f'<span style="font-weight:600;">{html.escape(str(scope), quote=True)}</span>'
         '</span>'
         f'<span style="font-family:{_UI_FONT_MONO};font-size:11.5px;color:{_UI_FG_MUTED};">'
-        f'{shown} / {total} · {pct:.1f}%</span>'
-        f'{_scope_switcher_html(active_scope_key)}'
+        f'{shown} / {total} genomes · {pct:.1f}%</span>'
         '</div>'
     )
 
@@ -1864,13 +1843,9 @@ def _plot_header_html(plot_title, analysis_type, total):
         '<div style="font-size:18px;font-weight:700;line-height:1.25;margin-top:2px;'
         f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{title}</div>'
         f'<div style="font-family:{_UI_FONT_MONO};font-size:11.5px;color:{_UI_FG_MUTED};'
-        f'margin-top:3px;">{total} samples</div>'
+        f'margin-top:3px;">{total} genomes</div>'
         '</div>'
         '<div style="display:inline-flex;gap:8px;align-items:center;flex:0 0 auto;">'
-        f'<button type="button" data-action="reset-all" '
-        f'style="all:unset;cursor:pointer;padding:6px 12px;border:1px solid {_UI_RULE};'
-        f'border-radius:4px;font-family:{_UI_FONT_SANS};font-size:12px;font-weight:600;'
-        f'color:{_UI_FG};background:{_UI_BG_SOFT};">Reset view</button>'
         f'<button type="button" data-action="toggle-help" aria-label="Keyboard shortcuts" '
         f'style="all:unset;cursor:pointer;width:28px;height:28px;line-height:28px;'
         f'text-align:center;border:1px solid {_UI_RULE};border-radius:50%;'
@@ -1880,17 +1855,20 @@ def _plot_header_html(plot_title, analysis_type, total):
         '<div data-egt-help="panel" style="display:none;flex-basis:100%;margin-top:10px;'
         f'padding:12px 14px;border:1px dashed {_UI_RULE};background:{_UI_BG_SOFT};'
         f'font-size:12px;line-height:1.55;color:{_UI_FG};">'
-        '<div style="font-weight:700;margin-bottom:4px;">Shortcuts &amp; scopes</div>'
+        '<div style="font-weight:700;margin-bottom:4px;">Tips</div>'
         f'<div><kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
-        f'border-radius:3px;background:{_UI_BG_RAISED};">/</kbd> focus taxid search &nbsp;·&nbsp; '
+        f'border-radius:3px;background:{_UI_BG_RAISED};">Enter</kbd> in a search box runs Apply search &nbsp;·&nbsp; '
         f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
-        f'border-radius:3px;background:{_UI_BG_RAISED};">Esc</kbd> clear selection &nbsp;·&nbsp; '
+        f'border-radius:3px;background:{_UI_BG_RAISED};">/</kbd> focuses taxid &nbsp;·&nbsp; '
         f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
-        f'border-radius:3px;background:{_UI_BG_RAISED};">E</kbd> export</div>'
+        f'border-radius:3px;background:{_UI_BG_RAISED};">Esc</kbd> clears selection &nbsp;·&nbsp; '
+        f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
+        f'border-radius:3px;background:{_UI_BG_RAISED};">E</kbd> opens Export</div>'
         '<div style="margin-top:6px;color:' + _UI_FG_MUTED + ';">'
-        'Scopes: <b>All</b> (every sample) · <b>Filtered</b> (search matches) · '
-        '<b>Lasso</b> (drag box/lasso on the plot) · <b>Table</b> (rows you pick in the table). '
-        'Export uses the active scope.'
+        'Click a Legend chip to select all genomes of that color group. '
+        'Click ⎘ next to a legend chip to copy that group&rsquo;s sample names. '
+        'Lasso/box-select on the plot highlights the points and updates Summary, Legend, and Rows; '
+        'Export saves whichever subset is active.'
         '</div>'
         '</div>'
         '</div>'
@@ -2401,21 +2379,6 @@ def _taxonomy_summary_js():
                 }
 
                 var scopeKey = exportStateKey(scope);
-                var scopeButtons = '';
-                for (var si = 0; si < SCOPE_ORDER.length; si++) {
-                    var sKey = SCOPE_ORDER[si][0];
-                    var sLabel = SCOPE_ORDER[si][1];
-                    var active = sKey === scopeKey;
-                    scopeButtons +=
-                        '<button type="button" data-scope-key="' + sKey + '"' +
-                        ' class="egt-scope-btn' + (active ? ' active' : '') + '"' +
-                        ' style="all:unset;cursor:pointer;padding:3px 10px;border-radius:999px;' +
-                        'border:1px solid ' + (active ? T.accent : T.rule) + ';' +
-                        'background:' + (active ? T.accent : 'transparent') + ';' +
-                        'color:' + (active ? '#ffffff' : T.accentFg) + ';' +
-                        'font-family:' + T.fontSans + ';font-size:11px;font-weight:600;' +
-                        'letter-spacing:.03em;">' + escapeHtml(sLabel) + '</button>';
-                }
 
                 if (typeof status_div !== 'undefined' && status_div) {
                     status_div.text =
@@ -2429,9 +2392,7 @@ def _taxonomy_summary_js():
                         '<span style="font-weight:600;">' + escapeHtml(scope) + '</span>' +
                         '</span>' +
                         '<span style="font-family:' + T.fontMono + ';font-size:11.5px;color:' + T.fgMuted + ';">' +
-                        total + ' / ' + allCount + ' · ' + pctShown.toFixed(1) + '%</span>' +
-                        '<span class="egt-scope-switcher" style="display:inline-flex;gap:6px;' +
-                        'margin-left:12px;vertical-align:middle;">' + scopeButtons + '</span>' +
+                        total + ' / ' + allCount + ' genomes · ' + pctShown.toFixed(1) + '%</span>' +
                         '</div>';
                 }
 
@@ -2457,16 +2418,54 @@ def _delegated_click_handler_js():
     copy-samples, all without depending on CustomJS context.
     """
     src = r"""
+        // Bokeh 3.x renders Div content inside a Shadow DOM. Click events
+        // bubble through the boundary but ev.target gets RETARGETED to the
+        // shadow host, so target.closest('[data-...]') returns null.
+        // composedPath() returns the full event path including shadow
+        // descendants, which is what we need to match our delegated buttons.
+        function findInPath(ev, selector) {
+            var path = ev.composedPath ? ev.composedPath() : [];
+            for (var i = 0; i < path.length; i++) {
+                var n = path[i];
+                if (n && n.nodeType === 1 && n.matches && n.matches(selector)) return n;
+            }
+            return null;
+        }
+        // Search for any element in the composed path whose data-* attribute
+        // (e.g. data-egt-help) is present and not an empty string.
+        function findInPathWithAttr(ev, attr) {
+            var path = ev.composedPath ? ev.composedPath() : [];
+            for (var i = 0; i < path.length; i++) {
+                var n = path[i];
+                if (n && n.nodeType === 1 && n.getAttribute) {
+                    var v = n.getAttribute(attr);
+                    if (v !== null && v !== '') return n;
+                }
+            }
+            return null;
+        }
+        function findHelpPanel() {
+            // Search the document AND every shadow root for [data-egt-help="panel"].
+            var found = document.querySelector('[data-egt-help="panel"]');
+            if (found) return found;
+            var hosts = document.querySelectorAll('*');
+            for (var i = 0; i < hosts.length; i++) {
+                var sr = hosts[i].shadowRoot;
+                if (sr) {
+                    var p = sr.querySelector('[data-egt-help="panel"]');
+                    if (p) return p;
+                }
+            }
+            return null;
+        }
         if (!window._egtDelegatorInstalled) {
             window._egtDelegatorInstalled = true;
             document.addEventListener('click', function(ev) {
                 var refs = window._egtRefs || {};
-                var target = ev.target;
-                if (!target || !target.closest) return;
 
-                var helpBtn = target.closest('[data-action="toggle-help"]');
+                var helpBtn = findInPath(ev, '[data-action="toggle-help"]');
                 if (helpBtn) {
-                    var panel = document.querySelector('[data-egt-help="panel"]');
+                    var panel = findHelpPanel();
                     if (panel) {
                         panel.style.display = (panel.style.display === 'none' || panel.style.display === '') ? 'block' : 'none';
                     }
@@ -2474,54 +2473,7 @@ def _delegated_click_handler_js():
                     return;
                 }
 
-                var resetBtn = target.closest('[data-action="reset-all"]');
-                if (resetBtn) {
-                    if (refs.source) {
-                        var data = refs.source.data;
-                        var colors = data['color'];
-                        var sizes = data['size'];
-                        var alphas = data['alpha'];
-                        var originals = data['original_color'];
-                        for (var i = 0; i < colors.length; i++) {
-                            colors[i] = originals[i];
-                            sizes[i] = 4;
-                            alphas[i] = 0.8;
-                        }
-                        refs.source.selected.indices = [];
-                        refs.source.change.emit();
-                    }
-                    if (refs.filtered_source && refs.source) {
-                        var fd = refs.filtered_source.data;
-                        for (var k in fd) { fd[k] = []; }
-                        var sd = refs.source.data;
-                        var n = sd['UMAP1'] ? sd['UMAP1'].length : 0;
-                        for (var i2 = 0; i2 < n; i2++) {
-                            for (var k2 in fd) { fd[k2].push(sd[k2][i2]); }
-                        }
-                        refs.filtered_source.selected.indices = [];
-                        refs.filtered_source.change.emit();
-                    }
-                    ev.preventDefault();
-                    return;
-                }
-
-                var scopeBtn = target.closest('[data-scope-key]');
-                if (scopeBtn && refs.export_state) {
-                    var newKey = scopeBtn.getAttribute('data-scope-key');
-                    refs.export_state.data['state'] = [newKey];
-                    var btns = document.querySelectorAll('[data-scope-key]');
-                    for (var b = 0; b < btns.length; b++) {
-                        var active = btns[b].getAttribute('data-scope-key') === newKey;
-                        btns[b].style.background = active ? '__EGT_ACCENT__' : 'transparent';
-                        btns[b].style.color = active ? '#ffffff' : '__EGT_ACCENT_FG__';
-                        btns[b].style.borderColor = active ? '__EGT_ACCENT__' : '__EGT_RULE__';
-                    }
-                    refs.export_state.change.emit();
-                    ev.preventDefault();
-                    return;
-                }
-
-                var copyBtn = target.closest('[data-copy-color]');
+                var copyBtn = findInPath(ev, '[data-copy-color]');
                 if (copyBtn && refs.source) {
                     ev.stopPropagation();
                     var wantColor = copyBtn.getAttribute('data-copy-color');
@@ -2544,7 +2496,7 @@ def _delegated_click_handler_js():
                     return;
                 }
 
-                var chip = target.closest('[data-legend-color]');
+                var chip = findInPath(ev, '[data-legend-color]');
                 if (chip && refs.source) {
                     var wantColor = chip.getAttribute('data-legend-color');
                     var sd = refs.source.data;
@@ -2561,12 +2513,7 @@ def _delegated_click_handler_js():
             }, false);
         }
     """
-    return (
-        src
-        .replace("__EGT_ACCENT__", _UI_ACCENT)
-        .replace("__EGT_ACCENT_FG__", _UI_ACCENT_FG)
-        .replace("__EGT_RULE__", _UI_RULE)
-    )
+    return src
 
 
 def mgt_mlt_plot_HTML(
@@ -3593,10 +3540,12 @@ def mgt_mlt_plot_HTML(
         )
         update_button = bokeh.models.Button(label="Apply search", button_type="success", width=side_button_width)
 
-        # Export and Clear get clearer names now that a Reset-view button exists too.
         export_button = bokeh.models.Button(label="Export", button_type="success", width=side_button_width)
-        clear_button = bokeh.models.Button(label="Clear selection", button_type="warning", width=110)
-        reset_view_button = bokeh.models.Button(label="Reset view", button_type="default", width=90)
+        # Single "Clear" that resets everything: selection, search inputs,
+        # zoom/pan, dot size/alpha, grid. The previous design had two
+        # near-identical buttons ("Reset view" and "Clear selection") which
+        # confused users about which did what; one button is friendlier.
+        clear_button = bokeh.models.Button(label="Clear", button_type="warning", width=80)
         if linked_tree_plot is not None:
             tree_toggle = bokeh.models.Button(label="Hide tree", button_type="default", width=90)
         else:
@@ -3902,7 +3851,12 @@ def mgt_mlt_plot_HTML(
         update_button.js_on_event("button_click", update_callback)
         size_slider.js_on_change("value", update_callback)
         alpha_slider.js_on_change("value", update_callback)
-        
+        # Bokeh TextInput.value commits on Enter (or blur). Wiring this
+        # change event makes Enter run the search instead of forcing the
+        # user to also click "Apply search".
+        search_taxid.js_on_change("value", update_callback)
+        rank_text.js_on_change("value", update_callback)
+
         # Separate callback for lasso selection that doesn't modify source.selected.indices
         # This avoids infinite loop while still providing immediate visual feedback
         lasso_callback_args = dict(
@@ -4064,6 +4018,8 @@ def mgt_mlt_plot_HTML(
             legend_div=legend_div,
             status_div=status_div,
             export_state=export_state,
+            plot=plot,
+            grid_button=grid_toggle,
         )
         clear_callback_args.update(tree_callback_args)
         clear_callback_js = r"""
@@ -4071,13 +4027,19 @@ def mgt_mlt_plot_HTML(
             var filtered_data = filtered_source.data;
 """ + tree_sync_js + _taxonomy_summary_js() + r"""
 
+            // Reset search inputs and selections.
             search_taxid.value = "";
             rank_text.value = "";
             source.selected.indices = [];
             filtered_source.selected.indices = [];
 
-            var slider_size = Math.max(size_slider.value, 1);
-            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            // Reset sliders to their defaults so the dot appearance returns
+            // to baseline (this is what users expect from "Clear").
+            size_slider.value = 4;
+            alpha_slider.value = 0.8;
+            var slider_size = 4;
+            var slider_alpha = 0.8;
+
             var colors = data['color'];
             var sizes = data['size'];
             var alphas = data['alpha'];
@@ -4095,6 +4057,14 @@ def mgt_mlt_plot_HTML(
                 }
             }
 
+            // Reset zoom/pan and grid visibility.
+            try { plot.reset.emit(); } catch (e) {}
+            try {
+                plot.xgrid[0].visible = true;
+                plot.ygrid[0].visible = true;
+                grid_button.label = "Grid: On";
+            } catch (e) {}
+
 """ + tree_reset_js + r"""
             renderSelectionSummary([], true, 'All points');
             source.change.emit();
@@ -4110,21 +4080,6 @@ def mgt_mlt_plot_HTML(
             if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
                 row_kwargs["sizing_mode"] = "stretch_width"
 
-        # Wire Reset view button: resets zoom, sliders, grid.
-        reset_view_cb = bokeh.models.CustomJS(
-            args=dict(plot=plot, size_slider=size_slider, alpha_slider=alpha_slider, grid_button=grid_toggle),
-            code=r"""
-                // Reset UMAP zoom/pan
-                try { plot.reset.emit(); } catch (e) {}
-                size_slider.value = 4;
-                alpha_slider.value = 0.8;
-                plot.xgrid[0].visible = true;
-                plot.ygrid[0].visible = true;
-                grid_button.label = "Grid: On";
-            """,
-        )
-        reset_view_button.js_on_event("button_click", reset_view_cb)
-
         if tree_toggle is not None:
             tree_toggle_cb = bokeh.models.CustomJS(
                 args=dict(tree=linked_tree_plot, button=tree_toggle),
@@ -4138,7 +4093,7 @@ def mgt_mlt_plot_HTML(
 
         control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
-        primary_actions = [update_button, clear_button, reset_view_button, export_button]
+        primary_actions = [update_button, clear_button, export_button]
         if tree_toggle is not None:
             primary_actions.append(tree_toggle)
         action_row = bokeh.layouts.row(*primary_actions, align="end", **row_kwargs)
@@ -4190,8 +4145,6 @@ def mgt_mlt_plot_HTML(
             "<style id=\"egt-ui-style\">"
             ".egt-legend-chip:hover{background:" + _UI_CHIP_HOVER + ";}"
             ".egt-legend-chip:focus{outline:2px solid " + _UI_ACCENT + ";outline-offset:1px;}"
-            ".egt-scope-btn:hover{background:" + _UI_ACCENT_SOFT + " !important;}"
-            ".egt-scope-btn.active{background:" + _UI_ACCENT + " !important;color:#fff !important;}"
             # Deliberately NOT adding responsive overrides on .bk-Row / .bk-Column:
             # those are Bokeh's internal layout classes and forcing widths there
             # breaks match_aspect and stretches the plot horizontally.

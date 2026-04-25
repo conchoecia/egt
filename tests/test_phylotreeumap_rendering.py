@@ -37,13 +37,13 @@ def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
     assert "Exploration summary" in html_text
     assert "renderSelectionSummary" in html_text
     assert "_row_id" in html_text
-    assert '"label":"Clear selection"' in html_text
+    assert '"label":"Clear"' in html_text
     assert "Active view" in html_text
     assert "Color legend" in html_text
     assert "search_results" in html_text
     assert "projection" in html_text
     # The UI now surfaces shortcuts/scopes instead of a static tagline.
-    assert "Shortcuts" in html_text
+    assert "Tips" in html_text
     assert "Linked tree enabled" not in html_text
     assert "UMAP only" not in html_text
     assert "https://cdn.bokeh.org" not in html_text
@@ -116,7 +116,7 @@ fallback:
     html_text = linked_html.read_text(encoding="utf-8")
     assert "Linked tree enabled" not in html_text
     assert "Exploration summary" in html_text
-    assert '"label":"Clear selection"' in html_text
+    assert '"label":"Clear"' in html_text
     assert "Active view" in html_text
     assert "Color legend" in html_text
     assert "tree_node_source" in html_text or "horizontal_segment_index" in html_text
