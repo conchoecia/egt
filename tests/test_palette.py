@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from importlib import resources
 
 from egt import palette as palette_module
 from egt.palette import CladeColor, Palette, add_palette_argument, load_palette
@@ -54,6 +55,26 @@ def test_palette_lineage_string_reverses_root_to_leaf_order():
     palette = load_palette()
     resolved = palette.for_lineage_string("33213;88770;7147;43845")
     assert resolved.taxid == 43845
+
+
+def test_simple_palette_keeps_requested_manuscript_clades(monkeypatch):
+    monkeypatch.setattr(palette_module, "_get_shared_taxid_canonicalizer", lambda: None)
+    palette_path = resources.files("egt.data").joinpath("paper_palette_simple.yaml")
+    palette = load_palette(palette_path)
+
+    trematode = palette.for_lineage_string("1;33208;-67;-68;33213;33317;2697495;6178")
+    lepidoptera = palette.for_lineage_string("1;33208;-67;-68;33213;33317;88770;6656;6960;50557;7088")
+    sheep = palette.for_lineage_string("1;33208;-67;-68;33213;33511;7711;32523;40674;9443;9940")
+    pig = palette.for_lineage_string("1;33208;-67;-68;33213;33511;7711;32523;40674;9443;9823")
+
+    assert trematode.taxid == 6178
+    assert trematode.label == "Trematoda"
+    assert lepidoptera.taxid == 7088
+    assert lepidoptera.label == "Lepidoptera (other)"
+    assert sheep.taxid == 9940
+    assert sheep.label == "Sheep"
+    assert pig.taxid == 9823
+    assert pig.label == "Pig"
 
 
 def test_palette_lineage_falls_back_on_unknown_values():

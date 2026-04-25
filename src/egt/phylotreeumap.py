@@ -1425,9 +1425,12 @@ def _build_linked_tree_bokeh_bundle(tree_newick_path, palette_path):
     }
 
 
-def _linked_tree_sync_js():
+def _linked_tree_sync_js(dim_color="#d3d3d3", dim_alpha=0.15):
     """Return the shared CustomJS helper used to sync the linked tree panel."""
-    return r"""
+    return (
+        "            var treeDimColor = " + json.dumps(dim_color) + ";\n"
+        "            var treeDimAlpha = " + f"{float(dim_alpha):.3f}" + ";\n"
+        + r"""
             function syncLinkedTree(selected_indices, show_all_data) {
                 if (!tree_source || !tree_node_source || !tree_leaf_source) {
                     return;
@@ -1532,8 +1535,8 @@ def _linked_tree_sync_js():
                 }
 
                 for (var i = 0; i < colors.length; i++) {
-                    colors[i] = '#d3d3d3';
-                    alphas[i] = 0.15;
+                    colors[i] = treeDimColor;
+                    alphas[i] = treeDimAlpha;
                 }
 
                 highlighted_segments.forEach(function(seg_idx) {
@@ -1543,6 +1546,7 @@ def _linked_tree_sync_js():
                 tree_source.change.emit();
             }
     """
+    )
 
 def _split_taxonomy_lineage(value):
     """Split a semicolon-delimited taxonomy lineage into non-empty labels."""
@@ -1679,6 +1683,256 @@ _UI_WARN = "#b7791f"
 _UI_RULE = "#c8c2b5"
 _UI_CHIP_HOVER = "#efeadf"
 
+_UI_THEMES = {
+    "paper": {
+        "bg": "#ffffff",
+        "bg_soft": "#fbfaf7",
+        "bg_raised": "#ffffff",
+        "border": "#d8d4cc",
+        "border_soft": "#e7e3d9",
+        "fg": "#25231f",
+        "fg_muted": "#6f6a5f",
+        "accent": "#376f6b",
+        "accent_soft": "#e6efed",
+        "accent_fg": "#1f3935",
+        "warn": "#b7791f",
+        "rule": "#c8c2b5",
+        "chip_hover": "#efeadf",
+        "grid": "#ded8cd",
+        "axis": "#6f6a5f",
+        "dim_point": "#d3d3d3",
+        "dim_alpha_scale": 0.2,
+        "tree_alpha": 0.75,
+        "tree_dim_alpha": 0.15,
+    },
+    "evogeno_dark": {
+        "bg": "#0a0a0a",
+        "bg_soft": "#111114",
+        "bg_raised": "#111114",
+        "border": "#1f2329",
+        "border_soft": "#1f2329",
+        "fg": "#f2f2ea",
+        "fg_muted": "#b8b8ae",
+        "accent": "#7fe0c8",
+        "accent_soft": "rgba(127, 224, 200, 0.12)",
+        "accent_fg": "#060608",
+        "warn": "#A78BFA",
+        "rule": "#1f2329",
+        "chip_hover": "#16161a",
+        "grid": "#1f2329",
+        "axis": "#b8b8ae",
+        "dim_point": "#76766f",
+        "dim_alpha_scale": 0.36,
+        "tree_alpha": 0.92,
+        "tree_dim_alpha": 0.28,
+    },
+}
+_DEFAULT_UI_THEME = "paper"
+
+
+def _set_ui_theme(ui_theme):
+    """Select the HTML/Bokeh UI theme for the current render."""
+    global _UI_BG, _UI_BG_SOFT, _UI_BG_RAISED, _UI_BORDER, _UI_BORDER_SOFT
+    global _UI_FG, _UI_FG_MUTED, _UI_ACCENT, _UI_ACCENT_SOFT, _UI_ACCENT_FG
+    global _UI_WARN, _UI_RULE, _UI_CHIP_HOVER
+
+    key = str(ui_theme or _DEFAULT_UI_THEME).strip().lower().replace("-", "_")
+    aliases = {
+        "light": "paper",
+        "default": "paper",
+        "dark": "evogeno_dark",
+        "evogeno": "evogeno_dark",
+    }
+    key = aliases.get(key, key)
+    if key not in _UI_THEMES:
+        valid = ", ".join(sorted(_UI_THEMES))
+        raise ValueError(f"Invalid ui_theme: {ui_theme}. Expected one of: {valid}.")
+
+    theme = _UI_THEMES[key]
+    _UI_BG = theme["bg"]
+    _UI_BG_SOFT = theme["bg_soft"]
+    _UI_BG_RAISED = theme["bg_raised"]
+    _UI_BORDER = theme["border"]
+    _UI_BORDER_SOFT = theme["border_soft"]
+    _UI_FG = theme["fg"]
+    _UI_FG_MUTED = theme["fg_muted"]
+    _UI_ACCENT = theme["accent"]
+    _UI_ACCENT_SOFT = theme["accent_soft"]
+    _UI_ACCENT_FG = theme["accent_fg"]
+    _UI_WARN = theme["warn"]
+    _UI_RULE = theme["rule"]
+    _UI_CHIP_HOVER = theme["chip_hover"]
+    return key, theme
+
+
+def _apply_bokeh_plot_theme(plot, theme):
+    """Apply the selected UI theme to a Bokeh figure."""
+    plot.background_fill_color = theme["bg"]
+    plot.border_fill_color = theme["bg"]
+    plot.outline_line_color = theme["border"]
+    plot.title.text_color = theme["fg"]
+    plot.title.text_font = "IBM Plex Sans"
+    plot.axis.axis_label_text_color = theme["axis"]
+    plot.axis.major_label_text_color = theme["axis"]
+    plot.axis.major_tick_line_color = theme["rule"]
+    plot.axis.minor_tick_line_color = theme["rule"]
+    plot.axis.axis_line_color = theme["rule"]
+    plot.grid.grid_line_color = theme["grid"]
+    plot.grid.grid_line_alpha = 0.65
+    return plot
+
+
+def _bokeh_widget_theme_css():
+    """CSS applied directly to Bokeh widget shadow DOM roots."""
+    return f"""
+:host {{
+  color: {_UI_FG};
+  --egt-bg: {_UI_BG};
+  --egt-bg-soft: {_UI_BG_SOFT};
+  --egt-bg-raised: {_UI_BG_RAISED};
+  --egt-fg: {_UI_FG};
+  --egt-muted: {_UI_FG_MUTED};
+  --egt-accent: {_UI_ACCENT};
+  --egt-accent-soft: {_UI_ACCENT_SOFT};
+  --egt-accent-fg: {_UI_ACCENT_FG};
+  --egt-warn: {_UI_WARN};
+  --egt-rule: {_UI_RULE};
+  --egt-hover: {_UI_CHIP_HOVER};
+}}
+.bk-input,.bk-select,.bk-input-group input,.choices__inner,.choices__input {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+  box-shadow: none !important;
+}}
+.bk-input:focus,.bk-select:focus,.bk-input-group input:focus,.choices.is-focused .choices__inner {{
+  border-color: var(--egt-accent) !important;
+  box-shadow: 0 0 0 2px var(--egt-accent-soft) !important;
+  outline: none !important;
+}}
+.bk-input::placeholder {{
+  color: var(--egt-muted) !important;
+  opacity: .8 !important;
+}}
+select.bk-input option,select.bk-select option {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+}}
+.bk-input-group label,.bk-input-group .bk-input-group-label,.bk-slider-title,.bk-slider-value {{
+  color: var(--egt-muted) !important;
+}}
+.noUi-target {{
+  background: var(--egt-bg-soft) !important;
+  border-color: var(--egt-rule) !important;
+  box-shadow: none !important;
+}}
+.noUi-connects {{
+  background: var(--egt-bg-soft) !important;
+}}
+.noUi-connect {{
+  background: var(--egt-accent) !important;
+}}
+.noUi-handle {{
+  background: var(--egt-accent) !important;
+  border: 1px solid var(--egt-accent) !important;
+  box-shadow: 0 0 0 3px var(--egt-accent-soft) !important;
+}}
+.noUi-handle:before,.noUi-handle:after {{
+  background: var(--egt-accent-fg) !important;
+  opacity: .45 !important;
+}}
+.noUi-value,.noUi-tooltip,.noUi-pips {{
+  color: var(--egt-muted) !important;
+}}
+.noUi-marker {{
+  background: var(--egt-rule) !important;
+}}
+.bk-btn,.bk-btn-light,.bk-btn-primary,.bk-btn-default {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+  box-shadow: none !important;
+}}
+.bk-btn:hover,.bk-btn-light:hover,.bk-btn-primary:hover,.bk-btn-default:hover {{
+  background: var(--egt-hover) !important;
+  border-color: var(--egt-accent) !important;
+  color: var(--egt-fg) !important;
+}}
+.bk-btn-success {{
+  background: var(--egt-accent) !important;
+  color: var(--egt-accent-fg) !important;
+  border-color: var(--egt-accent) !important;
+}}
+.bk-btn-success:hover {{
+  filter: brightness(1.08);
+}}
+.bk-dropdown .bk-menu,.bk-menu,.choices__list--dropdown {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.choices__item--choice,.choices__item--selectable {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+}}
+.choices__item--choice.is-highlighted,.choices__item--selectable.is-highlighted {{
+  background: var(--egt-hover) !important;
+  color: var(--egt-fg) !important;
+}}
+.choices__placeholder,.choices__item--disabled {{
+  color: var(--egt-muted) !important;
+  opacity: .8 !important;
+}}
+.bk-tab {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-muted) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.bk-tab.bk-active {{
+  background: var(--egt-bg-soft) !important;
+  color: var(--egt-accent) !important;
+  border-top-color: var(--egt-accent) !important;
+}}
+.bk-data-table,.slick-header,.slick-header-columns,.slick-header-column,
+.bk-data-table .slick-header,.bk-data-table .slick-header-columns,.bk-data-table .slick-header-column {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.slick-viewport,.slick-pane,.slick-row,
+.bk-data-table .slick-viewport,.bk-data-table .slick-pane,.bk-data-table .slick-row {{
+  background: var(--egt-bg-soft) !important;
+  color: var(--egt-fg) !important;
+}}
+.slick-cell,.slick-cell *,
+.bk-data-table .slick-cell,.bk-data-table .slick-cell * {{
+  background: transparent !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.slick-row.odd,.slick-row.odd .slick-cell,
+.bk-data-table .slick-row.odd,.bk-data-table .slick-row.odd .slick-cell {{
+  background: var(--egt-bg-raised) !important;
+}}
+.slick-row:hover,.slick-row:hover .slick-cell {{
+  background: var(--egt-hover) !important;
+}}
+.slick-row.active,.slick-row.active .slick-cell,
+.bk-data-table .slick-row.active,.bk-data-table .slick-row.active .slick-cell {{
+  background: var(--egt-accent-soft) !important;
+  color: var(--egt-fg) !important;
+}}
+"""
+
+
+def _apply_bokeh_widget_theme(stylesheet, *models):
+    """Attach a shared stylesheet to Bokeh widgets/layout models when supported."""
+    if stylesheet is None:
+        return
+    for model in models:
+        if model is not None and "stylesheets" in model.properties():
+            model.stylesheets = list(model.stylesheets) + [stylesheet]
+
 # Internal scope keys used by Export to label the file and pick the rows.
 # These are derived automatically from selection state; users no longer
 # pick them via a UI toggle (the previous scope switcher buttons were
@@ -1757,11 +2011,11 @@ def _taxonomy_summary_default_html(plot_data, analysis_type):
     for label, count in top_items:
         pct = (count / total * 100.0) if total else 0.0
         bar_html.append(
-            '<div style="display:grid;grid-template-columns:1fr 64px 72px;'
+            '<div style="display:grid;grid-template-columns:minmax(0,1fr) 96px 72px;'
             'align-items:center;column-gap:10px;margin:5px 0;font-size:12px;">'
             f'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(label)}</span>'
             f'<span style="font-family:{_UI_FONT_MONO};font-size:11px;color:{_UI_FG_MUTED};'
-            f'text-align:right;">{count}&nbsp;·&nbsp;{pct:.1f}%</span>'
+            f'text-align:right;white-space:nowrap;">{count}&nbsp;·&nbsp;{pct:.1f}%</span>'
             f'<span style="height:6px;background:{_UI_BORDER_SOFT};border-radius:3px;overflow:hidden;">'
             f'<span style="display:block;height:6px;width:{pct:.1f}%;background:{_UI_ACCENT};"></span>'
             '</span>'
@@ -1828,9 +2082,20 @@ def _selection_status_html(scope, shown, total, active_scope_key="all"):
     )
 
 
+def _display_plot_title(plot_title):
+    """Return a concise visible title without filename/palette implementation labels."""
+    title = str(plot_title or "UMAP")
+    title = re.sub(r"(?i)\bpaper[ _-]+palette\b", "", title)
+    title = re.sub(r"(?i)\bpaperpalette\b", "", title)
+    title = re.sub(r"\s{2,}", " ", title)
+    title = re.sub(r"\s+([,;:])", r"\1", title)
+    title = title.strip(" -_:")
+    return title or "UMAP"
+
+
 def _plot_header_html(plot_title, analysis_type, total):
     """Return the top-level page header for the interactive manuscript plot."""
-    title = html.escape(str(plot_title), quote=True)
+    title = html.escape(_display_plot_title(plot_title), quote=True)
     analysis = html.escape(str(analysis_type or ""), quote=True)
     return (
         f'<div class="egt-header" style="box-sizing:border-box;width:100%;padding:14px 20px;'
@@ -1844,32 +2109,6 @@ def _plot_header_html(plot_title, analysis_type, total):
         f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{title}</div>'
         f'<div style="font-family:{_UI_FONT_MONO};font-size:11.5px;color:{_UI_FG_MUTED};'
         f'margin-top:3px;">{total} genomes</div>'
-        '</div>'
-        '<div style="display:inline-flex;gap:8px;align-items:center;flex:0 0 auto;">'
-        f'<button type="button" data-action="toggle-help" aria-label="Keyboard shortcuts" '
-        f'style="all:unset;cursor:pointer;width:28px;height:28px;line-height:28px;'
-        f'text-align:center;border:1px solid {_UI_RULE};border-radius:50%;'
-        f'font-family:{_UI_FONT_SANS};font-size:13px;font-weight:700;color:{_UI_FG};'
-        f'background:{_UI_BG_SOFT};">?</button>'
-        '</div>'
-        '<div data-egt-help="panel" style="display:none;flex-basis:100%;margin-top:10px;'
-        f'padding:12px 14px;border:1px dashed {_UI_RULE};background:{_UI_BG_SOFT};'
-        f'font-size:12px;line-height:1.55;color:{_UI_FG};">'
-        '<div style="font-weight:700;margin-bottom:4px;">Tips</div>'
-        f'<div><kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
-        f'border-radius:3px;background:{_UI_BG_RAISED};">Enter</kbd> in a search box runs Apply search &nbsp;·&nbsp; '
-        f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
-        f'border-radius:3px;background:{_UI_BG_RAISED};">/</kbd> focuses taxid &nbsp;·&nbsp; '
-        f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
-        f'border-radius:3px;background:{_UI_BG_RAISED};">Esc</kbd> clears selection &nbsp;·&nbsp; '
-        f'<kbd style="font-family:{_UI_FONT_MONO};padding:1px 5px;border:1px solid {_UI_RULE};'
-        f'border-radius:3px;background:{_UI_BG_RAISED};">E</kbd> opens Export</div>'
-        '<div style="margin-top:6px;color:' + _UI_FG_MUTED + ';">'
-        'Click a Legend chip to select all genomes of that color group. '
-        'Click ⎘ next to a legend chip to copy that group&rsquo;s sample names. '
-        'Lasso/box-select on the plot highlights the points and updates Summary, Legend, and Rows; '
-        'Export saves whichever subset is active.'
-        '</div>'
         '</div>'
         '</div>'
     )
@@ -2333,11 +2572,11 @@ def _taxonomy_summary_js():
                     var count = entries[i][1];
                     var pct = total > 0 ? (count / total * 100.0) : 0.0;
                     bars +=
-                        '<div style="display:grid;grid-template-columns:1fr 64px 72px;' +
+                        '<div style="display:grid;grid-template-columns:minmax(0,1fr) 96px 72px;' +
                         'align-items:center;column-gap:10px;margin:5px 0;font-size:12px;">' +
                         '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
                         '<span style="font-family:' + T.fontMono + ';font-size:11px;color:' + T.fgMuted + ';' +
-                        'text-align:right;">' + count + '&nbsp;·&nbsp;' + pct.toFixed(1) + '%</span>' +
+                        'text-align:right;white-space:nowrap;">' + count + '&nbsp;·&nbsp;' + pct.toFixed(1) + '%</span>' +
                         '<span style="height:6px;background:' + T.borderSoft + ';border-radius:3px;overflow:hidden;">' +
                         '<span style="display:block;height:6px;width:' + pct.toFixed(1) + '%;background:' + T.accent + ';"></span>' +
                         '</span></div>';
@@ -2528,6 +2767,7 @@ def mgt_mlt_plot_HTML(
     tree_newick=None,
     tree_palette=None,
     tree_height=150,
+    ui_theme=_DEFAULT_UI_THEME,
 ):
     """
     This function takes the UMAPdf and generates an interactive Bokeh plot
@@ -2558,6 +2798,15 @@ def mgt_mlt_plot_HTML(
     """
     if analysis_type not in ["MGT", "MLT"]:
         raise ValueError(f"Invalid analysis_type: {analysis_type}. Must be 'MGT' or 'MLT'.")
+    ui_theme_key, selected_theme = _set_ui_theme(ui_theme)
+    display_plot_title = _display_plot_title(plot_title)
+    dim_point_js = json.dumps(selected_theme.get("dim_point", "#d3d3d3"))
+    dim_alpha_scale_js = f"{float(selected_theme.get('dim_alpha_scale', 0.2)):.3f}"
+    widget_stylesheet = (
+        bokeh.models.InlineStyleSheet(css=_bokeh_widget_theme_css())
+        if ui_theme_key == "evogeno_dark"
+        else None
+    )
 
     valid_sizing_modes = {
         None,
@@ -2720,12 +2969,13 @@ def mgt_mlt_plot_HTML(
     # Add a 'text_color' column based on original_color
     plot_data["text_color"] = plot_data["original_color"].apply(get_text_color)
 
-    side_panel_width = max(340, min(440, int(plot_width * 0.38)))
-    side_input_width = max(104, int((side_panel_width - 32) / 3))
+    plot_area_width = max(720, int(plot_width * 0.86))
+    side_panel_width = max(460, min(560, int(plot_width * 0.48)))
+    side_input_width = max(128, int((side_panel_width - 32) / 3))
     side_button_width = 92
-    page_width = int(plot_width) + side_panel_width + 24
+    page_width = plot_area_width + side_panel_width + 24
     header_div = bokeh.models.Div(
-        text=_plot_header_html(plot_title, analysis_type, len(plot_data)),
+        text=_plot_header_html(display_plot_title, analysis_type, len(plot_data)),
         width=page_width,
         sizing_mode="stretch_width",
     )
@@ -2790,22 +3040,25 @@ def mgt_mlt_plot_HTML(
 
     # Initialize Bokeh figure
     figure_kwargs = dict(
-        title=plot_title,
+        title=display_plot_title,
         tools="pan,wheel_zoom,box_zoom,lasso_select,reset,save",
-        width=int(plot_width),
+        width=plot_area_width,
         height=int(plot_height),
-        output_backend="svg",
+        # Canvas is materially faster than SVG for interactive lasso/selection
+        # on thousands of UMAP points. Keep the linked tree SVG-backed below.
+        output_backend="canvas",
     )
     if plot_sizing_mode and plot_sizing_mode != "fixed":
         figure_kwargs["sizing_mode"] = plot_sizing_mode
 
     plot = bokeh.plotting.figure(**figure_kwargs)
-    plot.output_backend = "svg"
+    plot.output_backend = "canvas"
     plot.match_aspect = bool(match_aspect)
     if plot.match_aspect:
         plot.aspect_scale = 1
     plot.min_border_left = 16
     plot.min_border_right = 16
+    _apply_bokeh_plot_theme(plot, selected_theme)
 
     linked_tree_plot = None
     linked_tree_source = None
@@ -2816,11 +3069,17 @@ def mgt_mlt_plot_HTML(
         linked_tree_source = tree_bundle["tree_source"]
         linked_tree_node_source = tree_bundle["tree_node_source"]
         linked_tree_leaf_source = tree_bundle["tree_leaf_source"]
+        tree_alpha = float(selected_theme.get("tree_alpha", 0.75))
+        linked_tree_source.data["alpha"] = [tree_alpha] * len(linked_tree_source.data.get("alpha", []))
+        linked_tree_source.data["original_alpha"] = [tree_alpha] * len(linked_tree_source.data.get("original_alpha", []))
+        linked_tree_source.data["line_width"] = [
+            max(float(width), 1.0) for width in linked_tree_source.data.get("line_width", [])
+        ]
 
         tree_figure_kwargs = dict(
             title="",
             tools="pan,xwheel_zoom,box_zoom,reset,save",
-            width=int(plot_width),
+            width=plot_area_width,
             height=int(tree_height),
             output_backend="svg",
             x_range=tree_bundle["x_range"],
@@ -2831,6 +3090,7 @@ def mgt_mlt_plot_HTML(
 
         linked_tree_plot = bokeh.plotting.figure(**tree_figure_kwargs)
         linked_tree_plot.output_backend = "svg"
+        _apply_bokeh_plot_theme(linked_tree_plot, selected_theme)
         linked_tree_plot.segment(
             x0="x0",
             y0="y0",
@@ -2848,10 +3108,10 @@ def mgt_mlt_plot_HTML(
         linked_tree_plot.yaxis.major_label_text_font_size = "8pt"
         linked_tree_plot.grid.visible = False
         linked_tree_plot.outline_line_color = None
-        linked_tree_plot.min_border_left = 16
+        linked_tree_plot.min_border_left = 24
         linked_tree_plot.min_border_right = 16
         linked_tree_plot.min_border_top = 4
-        linked_tree_plot.min_border_bottom = 0
+        linked_tree_plot.min_border_bottom = 12
 
         # Add a near-invisible leaf-hover layer so hovering near a tip reveals
         # its taxname without stealing vertical pixels from the 145 px tree.
@@ -2902,16 +3162,17 @@ def mgt_mlt_plot_HTML(
         step=0.05,
         value=default_alpha,
     )
-    grid_toggle = bokeh.models.Button(label="Grid: On", button_type="default")
+    grid_toggle = bokeh.models.Button(label="Grid: On", button_type="default", width=82)
+    grid_models = list(plot.xgrid) + list(plot.ygrid)
     grid_callback = bokeh.models.CustomJS(
-        args=dict(plot=plot, button=grid_toggle),
+        args=dict(grids=grid_models, button=grid_toggle),
         code="""
-            // Toggle grid visibility
-            var new_state = !plot.xgrid[0].visible;
-            
-            plot.xgrid[0].visible = new_state;
-            plot.ygrid[0].visible = new_state;
-            
+            if (grids.length === 0) { return; }
+            var new_state = !grids[0].visible;
+            for (var i = 0; i < grids.length; i++) {
+                grids[i].visible = new_state;
+                grids[i].change.emit();
+            }
             button.label = new_state ? "Grid: On" : "Grid: Off";
         """,
     )
@@ -3118,7 +3379,7 @@ def mgt_mlt_plot_HTML(
             var highlight_size = slider_size + highlight_size_offset;
             var dim_size = slider_size;
             var highlight_alpha = Math.min(1, slider_alpha + highlight_alpha_offset);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + r""");
 
             var use_and_logic = search_mode.active; // True for AND (&&), False for OR (||)
 
@@ -3225,7 +3486,7 @@ def mgt_mlt_plot_HTML(
                         sizes[i] = highlight_size;
                         selected_indices.push(i);
                     } else {
-                        colors[i] = '#d3d3d3';
+                        colors[i] = """ + dim_point_js + r""";
                         alphas[i] = dim_alpha;
                         sizes[i] = dim_size;
                     }
@@ -3294,7 +3555,7 @@ def mgt_mlt_plot_HTML(
             var highlight_size = slider_size + 2;
             var dim_size = slider_size;
             var highlight_alpha = Math.min(1, slider_alpha + 0.1);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + """);
             
             // Clear filtered data
             for (var key in filtered_data) {
@@ -3312,7 +3573,7 @@ def mgt_mlt_plot_HTML(
                         filtered_data[key].push(data[key][i]);
                     }
                 } else {
-                    colors[i] = '#d3d3d3';
+                    colors[i] = """ + dim_point_js + """;
                     alphas[i] = dim_alpha;
                     sizes[i] = dim_size;
                 }
@@ -3460,6 +3721,23 @@ def mgt_mlt_plot_HTML(
             if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
                 row_kwargs["sizing_mode"] = "stretch_width"
 
+        _apply_bokeh_widget_theme(
+            widget_stylesheet,
+            size_slider,
+            alpha_slider,
+            grid_toggle,
+            search_taxid,
+            rank_select,
+            rank_text,
+            search_group,
+            search_rbh,
+            search_toggle,
+            update_button,
+            clear_button,
+            export_button,
+            data_table,
+        )
+
         control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
         search_row = bokeh.layouts.row(
@@ -3506,10 +3784,17 @@ def mgt_mlt_plot_HTML(
         )
         plot.add_tools(hover)
 
-        tree_sync_js = _linked_tree_sync_js() if linked_tree_source is not None else ""
+        tree_sync_js = (
+            _linked_tree_sync_js(
+                selected_theme.get("dim_point", "#d3d3d3"),
+                selected_theme.get("tree_dim_alpha", 0.15),
+            )
+            if linked_tree_source is not None
+            else ""
+        )
         tree_reset_js = "syncLinkedTree([], true);" if linked_tree_source is not None else ""
         tree_apply_js = "syncLinkedTree(selected_indices, show_all_data);" if linked_tree_source is not None else ""
-        tree_lasso_js = "syncLinkedTree(lasso_indices, false);" if linked_tree_source is not None else ""
+        tree_lasso_js = "syncLinkedTree(lasso_snapshot, false);" if linked_tree_source is not None else ""
         tree_callback_args = {}
         if linked_tree_source is not None:
             tree_callback_args.update(
@@ -3551,6 +3836,12 @@ def mgt_mlt_plot_HTML(
         else:
             tree_toggle = None
 
+        coordinate_formatter = bokeh.models.HTMLTemplateFormatter(template="""
+            <span style="font-family:var(--jp-code-font-family, monospace);">
+                <%= Number(value).toFixed(2) %>
+            </span>
+        """)
+
         # Create table columns for MGT. Column order is tuned for the dominant
         # reviewer workflow (identify the sample, then read clade/taxid) and the
         # color swatch is demoted to a thin row marker instead of its own column.
@@ -3558,20 +3849,20 @@ def mgt_mlt_plot_HTML(
             bokeh.models.TableColumn(
                 field="sample",
                 title="Sample",
-                width=160,
+                width=130,
                 formatter=bokeh.models.HTMLTemplateFormatter(template="""
                     <span style="display:inline-block;padding:0 0 0 8px;
                                  border-left:4px solid <%= original_color %>;"><%= sample %></span>
                 """),
             ),
-            bokeh.models.TableColumn(field="taxid", title="Taxid", width=72),
-            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=70),
-            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=70),
+            bokeh.models.TableColumn(field="taxid", title="Taxid", width=64),
+            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=56, formatter=coordinate_formatter),
+            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=56, formatter=coordinate_formatter),
         ]
         if "color_group_label" in plot_data.columns:
-            mgt_columns.insert(1, bokeh.models.TableColumn(field="color_group_label", title="Clade", width=150))
+            mgt_columns.insert(1, bokeh.models.TableColumn(field="color_group_label", title="Clade", width=140))
         if "taxname" in plot_data.columns:
-            mgt_columns.insert(1, bokeh.models.TableColumn(field="taxname", title="Taxname", width=180))
+            mgt_columns.insert(1, bokeh.models.TableColumn(field="taxname", title="Taxname", width=170))
 
         # Create DataTable. Default height is tighter than before so the
         # table no longer dominates the panel; the "Rows" tab acts as the
@@ -3579,10 +3870,11 @@ def mgt_mlt_plot_HTML(
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=mgt_columns,
-            width=side_panel_width, height=340,
+            width=side_panel_width,
+            height=max(420, int(plot_height * 0.72)),
             editable=False,
             selectable=True,
-            sizing_mode="stretch_width",
+            sizing_mode="fixed",
             index_position=None,
         )
         
@@ -3700,7 +3992,7 @@ def mgt_mlt_plot_HTML(
             var highlight_size = slider_size + highlight_size_offset;
             var dim_size = slider_size;
             var highlight_alpha = Math.min(1, slider_alpha + highlight_alpha_offset);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + r""");
 
             var apply_taxid = taxid_terms.length > 0;
             var apply_rank = rank_field !== "" && rank_input !== "";
@@ -3813,7 +4105,7 @@ def mgt_mlt_plot_HTML(
                         sizes[i] = highlight_size;
                         selected_indices.push(i);
                     } else {
-                        colors[i] = '#d3d3d3';
+                        colors[i] = """ + dim_point_js + r""";
                         alphas[i] = dim_alpha;
                         sizes[i] = dim_size;
                     }
@@ -3878,50 +4170,67 @@ def mgt_mlt_plot_HTML(
             var lasso_indices = source.selected.indices;
 """ + _taxonomy_summary_js() + """
 """ + tree_sync_js + """
-            
+
             // Only process if there's an actual lasso selection
             if (lasso_indices.length === 0) return;
             if (search_taxid.value.trim() !== '' || rank_text.value.trim() !== '') return;
-            
-            var colors = data['color'];
-            var sizes = data['size'];
-            var alphas = data['alpha'];
-            var original_colors = data['original_color'];
-            
-            var slider_size = Math.max(size_slider.value, 1);
-            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
-            var highlight_size = slider_size + 2;
-            var dim_size = slider_size;
-            var highlight_alpha = Math.min(1, slider_alpha + 0.1);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
-            
-            // Clear filtered data
-            for (var key in filtered_data) {
-                filtered_data[key] = [];
+
+            // Bokeh fires many selected.indices changes during an active lasso.
+            // Rebuilding the table, summary, legend, and tree on every event
+            // makes dragging feel sticky, so coalesce rapid updates.
+            if (source._egt_lasso_timer) {
+                clearTimeout(source._egt_lasso_timer);
             }
-            
-            // Update visualization based on lasso selection
-            for (var i = 0; i < colors.length; i++) {
-                if (lasso_indices.indexOf(i) !== -1) {
-                    colors[i] = original_colors[i];
-                    alphas[i] = highlight_alpha;
-                    sizes[i] = highlight_size;
-                    // Add to filtered data
-                    for (var key in filtered_data) {
-                        filtered_data[key].push(data[key][i]);
-                    }
-                } else {
-                    colors[i] = '#d3d3d3';
-                    alphas[i] = dim_alpha;
-                    sizes[i] = dim_size;
+            var lasso_snapshot = lasso_indices.slice();
+            source._egt_lasso_timer = setTimeout(function() {
+                var current_indices = source.selected.indices.slice();
+                if (current_indices.length !== lasso_snapshot.length) {
+                    lasso_snapshot = current_indices;
                 }
-            }
-            
-            // Update sources (but DON'T modify source.selected.indices)
+                if (lasso_snapshot.length === 0) return;
+                if (search_taxid.value.trim() !== '' || rank_text.value.trim() !== '') return;
+
+                var selected_set = new Set(lasso_snapshot);
+                var colors = data['color'];
+                var sizes = data['size'];
+                var alphas = data['alpha'];
+                var original_colors = data['original_color'];
+
+                var slider_size = Math.max(size_slider.value, 1);
+                var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+                var highlight_size = slider_size + 2;
+                var dim_size = slider_size;
+                var highlight_alpha = Math.min(1, slider_alpha + 0.1);
+                var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + """);
+
+                // Clear filtered data
+                for (var key in filtered_data) {
+                    filtered_data[key] = [];
+                }
+
+                // Update visualization based on lasso selection
+                for (var i = 0; i < colors.length; i++) {
+                    if (selected_set.has(i)) {
+                        colors[i] = original_colors[i];
+                        alphas[i] = highlight_alpha;
+                        sizes[i] = highlight_size;
+                        // Add to filtered data
+                        for (var key in filtered_data) {
+                            filtered_data[key].push(data[key][i]);
+                        }
+                    } else {
+                        colors[i] = """ + dim_point_js + """;
+                        alphas[i] = dim_alpha;
+                        sizes[i] = dim_size;
+                    }
+                }
+
+                // Update sources (but DON'T modify source.selected.indices)
 """ + tree_lasso_js + """
-            renderSelectionSummary(lasso_indices, false, 'Lasso selection');
-            source.change.emit();
-            filtered_source.change.emit();
+                renderSelectionSummary(lasso_snapshot, false, 'Lasso selection');
+                source.change.emit();
+                filtered_source.change.emit();
+            }, 120);
         """
         lasso_callback = bokeh.models.CustomJS(args=lasso_callback_args, code=lasso_callback_js)
         
@@ -4020,6 +4329,7 @@ def mgt_mlt_plot_HTML(
             export_state=export_state,
             plot=plot,
             grid_button=grid_toggle,
+            grids=grid_models,
         )
         clear_callback_args.update(tree_callback_args)
         clear_callback_js = r"""
@@ -4060,8 +4370,10 @@ def mgt_mlt_plot_HTML(
             // Reset zoom/pan and grid visibility.
             try { plot.reset.emit(); } catch (e) {}
             try {
-                plot.xgrid[0].visible = true;
-                plot.ygrid[0].visible = true;
+                for (var gi = 0; gi < grids.length; gi++) {
+                    grids[gi].visible = true;
+                    grids[gi].change.emit();
+                }
                 grid_button.label = "Grid: On";
             } catch (e) {}
 
@@ -4091,14 +4403,32 @@ def mgt_mlt_plot_HTML(
             )
             tree_toggle.js_on_event("button_click", tree_toggle_cb)
 
-        control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
-        primary_actions = [update_button, clear_button, export_button]
-        if tree_toggle is not None:
-            primary_actions.append(tree_toggle)
-        action_row = bokeh.layouts.row(*primary_actions, align="end", **row_kwargs)
+        _apply_bokeh_widget_theme(
+            widget_stylesheet,
+            size_slider,
+            alpha_slider,
+            grid_toggle,
+            search_taxid,
+            rank_select,
+            rank_text,
+            update_button,
+            clear_button,
+            export_button,
+            tree_toggle,
+            data_table,
+        )
 
-        left_children = [plot, control_row]
+        control_row = bokeh.layouts.row(size_slider, alpha_slider, **row_kwargs)
+        grid_row = bokeh.layouts.row(grid_toggle, **row_kwargs)
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
+        action_row = bokeh.layouts.row(update_button, clear_button, export_button, align="start", **row_kwargs)
+        tree_action_row = (
+            bokeh.layouts.row(tree_toggle, align="start", **row_kwargs)
+            if tree_toggle is not None
+            else None
+        )
+
+        left_children = [plot, control_row, grid_row]
         if linked_tree_plot is not None:
             left_children.insert(0, linked_tree_plot)
         left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
@@ -4111,17 +4441,23 @@ def mgt_mlt_plot_HTML(
                 bokeh.models.TabPanel(child=legend_div, title="Legend"),
                 bokeh.models.TabPanel(child=data_table, title="Rows"),
             ],
-            sizing_mode="stretch_width",
+            width=side_panel_width,
         )
+        _apply_bokeh_widget_theme(widget_stylesheet, readout_tabs)
 
-        right_panel = bokeh.layouts.column(
+        right_children = [
             status_div,
             search_section_div,
             taxonomy_row,
             action_row,
             readout_tabs,
+        ]
+        if tree_action_row is not None:
+            right_children.insert(4, tree_action_row)
+
+        right_panel = bokeh.layouts.column(
+            *right_children,
             width=side_panel_width,
-            sizing_mode="stretch_width",
         )
         body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
         layout = bokeh.layouts.column(header_div, body_row, sizing_mode="stretch_width")
@@ -4132,7 +4468,7 @@ def mgt_mlt_plot_HTML(
     export_state_id = export_state.id if filtered_source is not None else None
 
     # Output to HTML
-    bokeh.plotting.output_file(outhtml, title=plot_title, mode="inline")
+    bokeh.plotting.output_file(outhtml, title=display_plot_title, mode="inline")
     bokeh.io.save(layout)
 
     # Inject global stylesheet + keyboard shortcut handler. This runs for
@@ -4141,10 +4477,15 @@ def mgt_mlt_plot_HTML(
     try:
         with open(outhtml, 'r', encoding='utf-8') as f:
             html_shell = f.read()
+        page_widget_css = _bokeh_widget_theme_css() if ui_theme_key == "evogeno_dark" else ""
         style_block = (
             "<style id=\"egt-ui-style\">"
+            "body{box-sizing:border-box;margin:0;padding:6px 24px 8px 6px;overflow-x:auto;"
+            "background:" + _UI_BG + ";color:" + _UI_FG + ";}"
+            "*,*:before,*:after{box-sizing:inherit;}"
             ".egt-legend-chip:hover{background:" + _UI_CHIP_HOVER + ";}"
             ".egt-legend-chip:focus{outline:2px solid " + _UI_ACCENT + ";outline-offset:1px;}"
+            + page_widget_css +
             # Deliberately NOT adding responsive overrides on .bk-Row / .bk-Column:
             # those are Bokeh's internal layout classes and forcing widths there
             # breaks match_aspect and stretches the plot horizontally.
@@ -4247,7 +4588,7 @@ def mgt_mlt_plot_HTML(
         }}
     }})();
     </script>
-</body>"""
+"""
         
         # Install the delegated click handler at page load so the scope
         # switcher, legend chips, Reset, and ? buttons are responsive
@@ -4260,7 +4601,7 @@ def mgt_mlt_plot_HTML(
 
         before_body, closing_body, after_body = html_content.rpartition('</body>')
         if closing_body:
-            html_content = before_body + init_script + delegator_script + after_body
+            html_content = before_body + init_script + delegator_script + closing_body + after_body
         else:
             html_content += init_script + delegator_script
 
@@ -6320,6 +6661,7 @@ def _cmd_plot_html(args):
         tree_newick=args.tree_newick,
         tree_palette=args.tree_palette,
         tree_height=args.tree_height,
+        ui_theme=args.ui_theme,
     )
     return 0
 
@@ -6408,6 +6750,7 @@ def main(argv=None):
     p.add_argument("--tree-newick", default=None, help="Optional collapsed calibrated Newick to render above the UMAP (MGT only).")
     p.add_argument("--tree-palette", default=None, help="Optional palette YAML for linked tree coloring (defaults to bundled paper_palette.yaml).")
     p.add_argument("--tree-height", type=int, default=150, help="Height in pixels of the linked tree panel when enabled.")
+    p.add_argument("--ui-theme", default=_DEFAULT_UI_THEME, choices=sorted(_UI_THEMES), help="HTML UI color theme.")
     p.set_defaults(func=_cmd_plot_html)
 
     args = parser.parse_args(argv)

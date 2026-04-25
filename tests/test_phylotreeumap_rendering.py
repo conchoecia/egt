@@ -31,7 +31,13 @@ def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
     ).to_csv(umap_df, sep="\t", index=False)
 
     html_out = tmp_path / "plot.html"
-    ptu.mgt_mlt_plot_HTML(str(umap_df), str(html_out), analysis_type="MGT", plot_sizing_mode="stretch_width")
+    ptu.mgt_mlt_plot_HTML(
+        str(umap_df),
+        str(html_out),
+        plot_title="Subsample allsamples paper palette",
+        analysis_type="MGT",
+        plot_sizing_mode="stretch_width",
+    )
     assert html_out.exists()
     html_text = html_out.read_text(encoding="utf-8")
     assert "Exploration summary" in html_text
@@ -42,13 +48,33 @@ def test_mgt_mlt_plot_html_and_pdf_exports(tmp_path: Path, monkeypatch):
     assert "Color legend" in html_text
     assert "search_results" in html_text
     assert "projection" in html_text
-    # The UI now surfaces shortcuts/scopes instead of a static tagline.
-    assert "Tips" in html_text
+    assert "paper palette" not in html_text.lower()
+    assert "Tips" not in html_text
+    assert "grid-template-columns:minmax(0,1fr) 96px 72px" in html_text
+    assert "text-align:right;white-space:nowrap" in html_text
+    assert "_egt_lasso_timer" in html_text
+    assert "new Set(lasso_snapshot)" in html_text
+    assert '"output_backend":"svg"' not in html_text
     assert "Linked tree enabled" not in html_text
     assert "UMAP only" not in html_text
     assert "https://cdn.bokeh.org" not in html_text
     assert html_text.count("Auto-populate table on page load") == 1
     assert html_text.rfind("Auto-populate table on page load") > html_text.rfind("Bokeh.safely")
+    assert html_text.rfind("egt-delegator") < html_text.rfind("</body>")
+
+    dark_html = tmp_path / "plot_dark.html"
+    ptu.mgt_mlt_plot_HTML(
+        str(umap_df),
+        str(dark_html),
+        plot_title="Subsample allsamples paper palette",
+        analysis_type="MGT",
+        ui_theme="evogeno_dark",
+    )
+    dark_text = dark_html.read_text(encoding="utf-8")
+    assert "#0a0a0a" in dark_text
+    assert "#7fe0c8" in dark_text
+    assert "#A78BFA" in dark_text
+    assert "paper palette" not in dark_text.lower()
 
     tree_path = tmp_path / "tiny_tree.nwk"
     tree_path.write_text("((Alpha:1,Beta:1):1,Gamma:2);\n")
@@ -119,6 +145,7 @@ fallback:
     assert '"label":"Clear"' in html_text
     assert "Active view" in html_text
     assert "Color legend" in html_text
+    assert '"output_backend":"svg"' in html_text
     assert "tree_node_source" in html_text or "horizontal_segment_index" in html_text
 
     mlt_html_df = tmp_path / "mlt_html.tsv"

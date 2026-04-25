@@ -211,6 +211,11 @@ clades:
     label: "Spiralia"
     color: "#2432bf"
     phylopic_uuid: null
+  trematoda_6178:
+    taxid: 6178
+    label: "Trematoda"
+    color: "#24ed54"
+    phylopic_uuid: null
   mollusca_6447:
     taxid: 6447
     label: "Mollusca"
@@ -310,6 +315,16 @@ clades:
     taxid: 9263
     label: "Marsupials"
     color: "#5fa4e2"
+    phylopic_uuid: null
+  sheep_9940:
+    taxid: 9940
+    label: "Sheep"
+    color: "#6f9fbd"
+    phylopic_uuid: null
+  pig_9823:
+    taxid: 9823
+    label: "Pig"
+    color: "#86b8a8"
     phylopic_uuid: null
   aves_8782:
     taxid: 8782
