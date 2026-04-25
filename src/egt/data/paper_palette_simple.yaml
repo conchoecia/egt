@@ -316,6 +316,11 @@ clades:
     label: "Marsupials"
     color: "#5fa4e2"
     phylopic_uuid: null
+  ovis_9935:
+    taxid: 9935
+    label: "Ovis"
+    color: "#6f9fbd"
+    phylopic_uuid: null
   sheep_9940:
     taxid: 9940
     label: "Sheep"
@@ -325,6 +330,11 @@ clades:
     taxid: 9823
     label: "Pig"
     color: "#86b8a8"
+    phylopic_uuid: null
+  muroidea_337687:
+    taxid: 337687
+    label: "Muroidea"
+    color: "#9b5c8f"
     phylopic_uuid: null
   aves_8782:
     taxid: 8782

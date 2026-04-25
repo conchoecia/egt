@@ -64,17 +64,25 @@ def test_simple_palette_keeps_requested_manuscript_clades(monkeypatch):
 
     trematode = palette.for_lineage_string("1;33208;-67;-68;33213;33317;2697495;6178")
     lepidoptera = palette.for_lineage_string("1;33208;-67;-68;33213;33317;88770;6656;6960;50557;7088")
+    ovis = palette.for_lineage_string("1;33208;-67;-68;33213;33511;7711;32523;40674;9935")
     sheep = palette.for_lineage_string("1;33208;-67;-68;33213;33511;7711;32523;40674;9443;9940")
     pig = palette.for_lineage_string("1;33208;-67;-68;33213;33511;7711;32523;40674;9443;9823")
+    muroidea = palette.for_lineage_string("1;33208;-67;-68;33213;33511;7711;32523;40674;337687;10066")
 
     assert trematode.taxid == 6178
     assert trematode.label == "Trematoda"
     assert lepidoptera.taxid == 7088
     assert lepidoptera.label == "Lepidoptera (other)"
+    assert ovis.taxid == 9935
+    assert ovis.label == "Ovis"
+    assert ovis.color == "#6f9fbd"
     assert sheep.taxid == 9940
     assert sheep.label == "Sheep"
     assert pig.taxid == 9823
     assert pig.label == "Pig"
+    assert muroidea.taxid == 337687
+    assert muroidea.label == "Muroidea"
+    assert muroidea.color == "#9b5c8f"
 
 
 def test_palette_lineage_falls_back_on_unknown_values():

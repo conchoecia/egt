@@ -224,6 +224,10 @@ def parse_args(argv=None):
                         help="Number of columns for --plot_features or --plot-phyla grid layout. If not specified, uses sqrt of total panels (square grid).")
     parser.add_argument("--phyla-manuscript-layout", action="store_true",
                         help="For --plot-phyla, render the manuscript 4x4 all-samples panel plus a 3x4 right-side clade panel layout.")
+    parser.add_argument("--phyla-main-panel-output", type=str, default=None,
+                        help="Optional PDF path for a standalone 4x4 all-samples panel from --phyla-manuscript-layout.")
+    parser.add_argument("--phyla-main-panel-highlight-taxid", type=int, default=None,
+                        help="For --phyla-main-panel-output, highlight this lineage taxid and draw all other points grey.")
     parser.add_argument("--main-panel-side-buffer", type=float, default=0.10,
                         help="Extra x-axis padding fraction for the large panel in --phyla-manuscript-layout (default: 0.10).")
 
@@ -1623,13 +1627,13 @@ def plot_phyla(args, outpdf, metadata_df=None):
             ("Deuterostomia", lambda tx: 33511 in tx),
             ("Protostomia", lambda tx: 33317 in tx),
             ("Non-Bilateria", lambda tx: 33208 in tx and 33213 not in tx),
-            ("Birds + lizards", lambda tx: 8782 in tx or 8509 in tx),
+            ("Sauropsida", lambda tx: 8457 in tx),
             ("Arthropoda", lambda tx: 6656 in tx),
             ("Porifera", lambda tx: 6040 in tx),
             ("Mammalia", lambda tx: 40674 in tx),
             ("Lepidoptera", lambda tx: 7088 in tx),
             ("Cnidaria", lambda tx: 6073 in tx),
-            ("Non-chordate\ndeuterostomes", lambda tx: 33511 in tx and 7711 not in tx),
+            ("Fishes", lambda tx: 7742 in tx and 32523 not in tx),
             ("Spiralia", lambda tx: 2697495 in tx),
             ("Ctenophora", lambda tx: 10197 in tx),
         ]
@@ -1670,17 +1674,36 @@ def plot_phyla(args, outpdf, metadata_df=None):
             ax.set_ylim(y_mid - new_width / 2, y_mid + new_width / 2)
             ax.set_aspect("equal", adjustable="box")
 
-        def create_manuscript_figure(include_labels=True, include_grid=True, include_vectors=True):
-            fig_new = plt.figure(figsize=(fig_width, fig_height), facecolor="white")
-            ax_large = add_cell_axes(fig_new, 0, 0, rowspan=4, colspan=4)
-            ax_large.scatter(
-                df["UMAP1"],
-                df["UMAP2"],
-                s=0.95 * 16,
-                lw=0,
-                alpha=0.58,
-                color=df["color"],
-            )
+        def draw_main_panel(ax_large, include_labels=True, include_vectors=True, highlight_taxid=None):
+            if highlight_taxid is None:
+                ax_large.scatter(
+                    df["UMAP1"],
+                    df["UMAP2"],
+                    s=0.95 * 16,
+                    lw=0,
+                    alpha=0.58,
+                    color=df["color"],
+                )
+            else:
+                highlight_mask = df["_lineage_taxids"].apply(lambda tx: int(highlight_taxid) in tx).to_numpy(bool)
+                ax_large.scatter(
+                    df.loc[~highlight_mask, "UMAP1"],
+                    df.loc[~highlight_mask, "UMAP2"],
+                    s=0.95 * 16,
+                    lw=0,
+                    alpha=0.25,
+                    color=GREY_COLOR,
+                    zorder=1,
+                )
+                ax_large.scatter(
+                    df.loc[highlight_mask, "UMAP1"],
+                    df.loc[highlight_mask, "UMAP2"],
+                    s=0.95 * 16,
+                    lw=0,
+                    alpha=0.82,
+                    color=df.loc[highlight_mask, "color"],
+                    zorder=2,
+                )
             set_main_limits_with_side_buffer(ax_large)
             ax_large.set_xticks([])
             ax_large.set_yticks([])
@@ -1745,6 +1768,23 @@ def plot_phyla(args, outpdf, metadata_df=None):
                     ha="center",
                     va="center",
                 )
+
+        def create_main_panel_figure():
+            main_panel_side = 4 * cell_w + 3 * gap
+            fig_new = plt.figure(figsize=(main_panel_side, main_panel_side), facecolor="white")
+            ax_large = fig_new.add_axes([0, 0, 1, 1])
+            draw_main_panel(
+                ax_large,
+                include_labels=False,
+                include_vectors=False,
+                highlight_taxid=getattr(args, "phyla_main_panel_highlight_taxid", None),
+            )
+            return fig_new
+
+        def create_manuscript_figure(include_labels=True, include_grid=True, include_vectors=True):
+            fig_new = plt.figure(figsize=(fig_width, fig_height), facecolor="white")
+            ax_large = add_cell_axes(fig_new, 0, 0, rowspan=4, colspan=4)
+            draw_main_panel(ax_large, include_labels=include_labels, include_vectors=include_vectors)
 
             for idx, (label, _) in enumerate(clades):
                 row = idx // 3
@@ -1813,6 +1853,11 @@ def plot_phyla(args, outpdf, metadata_df=None):
             fig_clean = create_manuscript_figure(include_labels=False, include_grid=False, include_vectors=False)
             fig_clean.savefig(clean_outpdf)
             plt.close(fig_clean)
+        if getattr(args, "phyla_main_panel_output", None):
+            print(f"Saving standalone manuscript main panel to {args.phyla_main_panel_output}")
+            fig_main = create_main_panel_figure()
+            fig_main.savefig(args.phyla_main_panel_output)
+            plt.close(fig_main)
         return
     
     all_panel_span = max(1, int(getattr(args, "all_panel_span", 2)))

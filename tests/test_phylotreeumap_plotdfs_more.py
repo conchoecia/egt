@@ -122,15 +122,15 @@ def test_plot_phyla_manuscript_clean_uses_same_canvas(tmp_path: Path, monkeypatc
             "UMAP2": [float(i // 4) for i in range(12)],
             "taxid_list_str": [
                 "1;2759;33154;33208;33213;33511;7711;40674",
-                "1;2759;33154;33208;33213;33511;7711;8782",
-                "1;2759;33154;33208;33213;33511;7711;8509",
+                "1;2759;33154;33208;33213;33511;7711;8457;8782",
+                "1;2759;33154;33208;33213;33511;7711;8457;8509",
                 "1;2759;33154;33208;33213;33317;6656;7088",
                 "1;2759;33154;33208;33213;33317;6656",
                 "1;2759;33154;33208;33213;33317;2697495",
                 "1;2759;33154;33208;6040",
                 "1;2759;33154;33208;6073",
                 "1;2759;33154;33208;10197",
-                "1;2759;33154;33208;33213;33511;7586",
+                "1;2759;33154;33208;33213;33511;7711;7742;7776;7898",
                 "1;2759;33154;33208;6040",
                 "1;2759;33154;33208;6073",
             ],
@@ -159,11 +159,17 @@ def test_plot_phyla_manuscript_clean_uses_same_canvas(tmp_path: Path, monkeypatc
         recolored_df_out=None,
         phyla_manuscript_layout=True,
         main_panel_side_buffer=0.10,
+        phyla_main_panel_output=str(tmp_path / "phyla_main_panel.pdf"),
+        phyla_main_panel_highlight_taxid=6656,
     )
     outpdf = tmp_path / "phyla.pdf"
     plotdfs.plot_phyla(args, str(outpdf))
 
-    assert [call[0] for call in savefig_calls] == ["phyla.pdf", "phyla_clean.pdf"]
+    assert [call[0] for call in savefig_calls] == [
+        "phyla.pdf",
+        "phyla_clean.pdf",
+        "phyla_main_panel.pdf",
+    ]
     assert all("bbox_inches" not in kwargs for _, kwargs in savefig_calls)
 
 
