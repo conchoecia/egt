@@ -105,3 +105,21 @@ replace = 'version = "{new_version}"'
 filename = "src/egt/__init__.py"
 search  = '__version__ = "{current_version}"'
 replace = '__version__ = "{new_version}"'
+
+# CHANGELOG rotation: convert the [Unreleased] section into a versioned,
+# dated section as part of the bump. The Unreleased heading itself stays
+# in place (now empty) so the next round of PRs can append to it.
+#   Before:  ## [Unreleased]
+#            ### Added
+#            - foo
+#   After:   ## [Unreleased]
+#
+#            ## [X.Y.Z] - 2026-MM-DD
+#            ### Added
+#            - foo
+[[tool.bumpversion.files]]
+filename = "CHANGELOG.md"
+search  = "## [Unreleased]"
+replace = """## [Unreleased]
+
+## [{new_version}] - {now:%Y-%m-%d}"""
