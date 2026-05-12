@@ -8,6 +8,9 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+### Added
+- `AGENTS.md` documenting the release / publishing process — `bump-my-version bump` → `git push --follow-tags` → `gh release create` → `publish.yml` OIDC upload — plus CHANGELOG conventions, semver guidance, common failure modes, and anti-patterns.
+
 ## [0.2.3] - 2026-05-12
 
 ### Changed
