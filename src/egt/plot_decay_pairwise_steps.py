@@ -86,10 +86,14 @@ def parse_args(argv=None):
     parser.add_argument("--ALG_rbh_dir",
         help="Directory containing species vs ALG RBH files (e.g., /path/to/rbh_files/) for ALG mapping. "
              "Files should be named like {species}_vs_{ALGname}.rbh")
-    parser.add_argument("--sa-1-column", dest="sa_1_column", action="store_true",
-        help="Additionally emit a Science Advances 1-column (90 mm) "
-             "side-by-side C+D PDF (panels_CD_90mm.pdf) using the "
-             "SA-compliant typography and density-scaled scatter.")
+    parser.add_argument("--column-width-mm", dest="column_width_mm",
+        type=int, default=None,
+        help="If set, additionally emit a column-width-fitting "
+             "side-by-side C+D PDF named panels_CD_<N>mm.pdf where N is "
+             "this argument. Total figure width is exactly N "
+             "millimeters; axes width is solved from N and fixed "
+             "margins. Common journal column widths: 90 (single "
+             "column), 180 (double column).")
     args = parser.parse_args(argv)
     # if the length of args is 0 print the help and quit
     if argv is None and len(sys.argv) == 1:
@@ -1097,21 +1101,31 @@ def _sa_scatter_panel(ax, animals_df, holos_df, *,
     style_axes(ax)
 
 
-def _emit_sa_cd_90mm(sp1, wg_records, pc_records, outdir, *,
-                     holozoan_species):
-    """Emit the Science Advances 1-column (90 mm) C+D side-by-side PDF.
+def _emit_cd_column_width(sp1, wg_records, pc_records, outdir, *,
+                          width_mm, holozoan_species):
+    """Emit a column-width-fitting C+D side-by-side PDF.
 
-    Each axes data box is exactly 0.9621 in × 0.7786 in (manuscript
-    middle-panel spec). Inch-anchored margins keep the data boxes the
-    requested size regardless of label widths. Helvetica throughout,
-    text editable (`pdf.fonttype = 42`), 0.4 pt axes/spines.
+    The total figure width is exactly ``width_mm`` millimeters. Common
+    journal-column widths: 90 mm (single column), 180 mm (double
+    column). Axes width is solved from the target figure width and
+    fixed inch-anchored margins; axes height stays at 0.7786 in so the
+    data-box aspect ratio matches the original 90 mm preset (0.9621 ×
+    0.7786 in axes at width_mm=90). Helvetica, editable text
+    (`pdf.fonttype=42`), 0.4 pt axes/spines.
     """
-    AX_W, AX_H = 0.9621, 0.7786
+    MM_PER_IN = 25.4
+    fig_w = width_mm / MM_PER_IN
+    AX_H = 0.7786
     MARGIN_L, MARGIN_R = 0.42, 0.15
     MARGIN_B, MARGIN_T = 0.65, 0.18
     WSPACE_IN = 0.10
-
-    fig_w = MARGIN_L + 2 * AX_W + WSPACE_IN + MARGIN_R
+    AX_W = (fig_w - MARGIN_L - MARGIN_R - WSPACE_IN) / 2.0
+    if AX_W <= 0:
+        raise ValueError(
+            f"column_width_mm={width_mm} is too small: leaves no room "
+            f"for axes after {MARGIN_L + MARGIN_R + WSPACE_IN:.2f} in of "
+            f"margins + inter-panel spacing."
+        )
     fig_h = MARGIN_B + AX_H + MARGIN_T
 
     fig, axes = plt.subplots(1, 2, figsize=(fig_w, fig_h), sharey=True,
@@ -1181,15 +1195,15 @@ def _emit_sa_cd_90mm(sp1, wg_records, pc_records, outdir, *,
              ha="center", va="center", fontsize=7)
 
     os.makedirs(outdir, exist_ok=True)
-    outfile = os.path.join(outdir, "panels_CD_90mm.pdf")
+    outfile = os.path.join(outdir, f"panels_CD_{int(width_mm)}mm.pdf")
     fig.savefig(outfile, format="pdf", dpi=600)
     plt.close(fig)
-    print(f"Saved Science Advances 1-column figure to {outfile}", file=sys.stderr)
+    print(f"Saved {width_mm} mm column-width figure to {outfile}", file=sys.stderr)
 
 
 def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50,
                                     alg_rbh_file=None, alg_rbh_dir=None,
-                                    algname="BCnS", sa_1_column=False,
+                                    algname="BCnS", column_width_mm=None,
                                     holozoan_species=None):
     """
     Plot pairwise chromosome decay of sp1 versus every other species in
@@ -1214,16 +1228,18 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50,
     bin_size : int
         Violin-plot time bin width (Mya).
     alg_rbh_file, alg_rbh_dir, algname :
-        Retained for backwards-compat. The SA scatter no longer colors
+        Retained for backwards-compat. The scatter no longer colors
         chromosomes by dominant ALG (one blue + holozoan callouts), but
         callers still pass these for other code paths.
-    sa_1_column : bool
-        If True, additionally emit ``panels_CD_90mm.pdf`` — the Science
-        Advances 1-column (90 mm) submission figure with each axes data
-        box at exactly 0.9621 × 0.7786 in.
+    column_width_mm : int | None
+        If set, additionally emit ``panels_CD_<N>mm.pdf`` — a column-
+        width-fitting side-by-side figure with total figure width
+        exactly ``column_width_mm`` millimeters. Axes width is solved
+        from N and fixed margins; axes height stays 0.7786 in. Common
+        values: 90 (single-column journal), 180 (double-column).
     holozoan_species : iterable[str] | None
         Species IDs to draw as holozoan callouts. Defaults to
-        :data:`egt.plot.HOLOZOAN_SPECIES`.
+        :data:`egt.dispersal_panel_style.HOLOZOAN_SPECIES`.
     """
     apply_rc()
     holozoan_set = set(holozoan_species) if holozoan_species is not None else set(HOLOZOAN_SPECIES)
@@ -1395,9 +1411,10 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50,
     plt.close(fig)
     print(f"Saved decay overview to {outdir_prefix}.pdf", file=sys.stderr)
 
-    if sa_1_column:
-        _emit_sa_cd_90mm(sp1, wg_records, pc_records, outdir,
-                         holozoan_species=holozoan_set)
+    if column_width_mm is not None:
+        _emit_cd_column_width(sp1, wg_records, pc_records, outdir,
+                              width_mm=column_width_mm,
+                              holozoan_species=holozoan_set)
 
 
 def plot_decay_twospecies(sp1, sp2, path_to_tsv, scaffolds_to_keep_sp1, outdir):
@@ -1609,7 +1626,7 @@ def main(argv=None):
         plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir, bin_size=args.bin_size,
                                        alg_rbh_file=args.ALG_rbh, alg_rbh_dir=args.ALG_rbh_dir,
                                        algname=args.ALGname,
-                                       sa_1_column=args.sa_1_column)
+                                       column_width_mm=args.column_width_mm)
         
         # make the dispersal plots
         outdir = os.path.join("odp_pairwise_decay", sp1)

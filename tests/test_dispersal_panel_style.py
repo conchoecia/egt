@@ -19,7 +19,7 @@ Covers:
      - Creolimax full ID present (regression guard)
   6. plot_pairwise_decay_sp1_vs_all:
      - Creolimax-like all-zero row passes through (NOT filtered)
-     - --sa-1-column flag emits panels_CD_90mm.pdf
+     - --column-width-mm N flag emits panels_CD_<N>mm.pdf at the requested width
 """
 from __future__ import annotations
 
@@ -223,9 +223,11 @@ def test_plot_pairwise_decay_passes_through_zero_fraction_holozoan(tmp_path: Pat
     assert (outdir / f"{sp1}_decay_plot_vs_divergence_time.pdf").exists()
 
 
-def test_plot_pairwise_decay_sa_1_column_emits_90mm_pdf(tmp_path: Path):
-    """--sa-1-column / sa_1_column=True must additionally emit
-    panels_CD_90mm.pdf alongside the main 2x2 PDF."""
+@pytest.mark.parametrize("width_mm", [90, 180])
+def test_plot_pairwise_decay_column_width_emits_named_pdf(tmp_path: Path,
+                                                          width_mm: int):
+    """column_width_mm=N must additionally emit panels_CD_<N>mm.pdf
+    alongside the main 2x2 PDF."""
     sp1 = "Pectenmaximus-6579-GCF902652985.1"
     animal = "GenericAnimal-1234-GCF000000001.1"
     animal_tsv = tmp_path / "animal.tsv"
@@ -237,18 +239,35 @@ def test_plot_pairwise_decay_sa_1_column_emits_90mm_pdf(tmp_path: Path):
 
     outdir = tmp_path / "out"
     pdps.plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=str(outdir),
-                                        sa_1_column=True)
+                                        column_width_mm=width_mm)
     assert (outdir / f"{sp1}_decay_plot_vs_divergence_time.pdf").exists()
-    assert (outdir / "panels_CD_90mm.pdf").exists()
+    assert (outdir / f"panels_CD_{width_mm}mm.pdf").exists()
 
 
-def test_parse_args_accepts_sa_1_column_flag(tmp_path: Path):
-    """CLI plumbing: --sa-1-column flag must set args.sa_1_column=True."""
+def test_parse_args_accepts_column_width_mm_flag(tmp_path: Path):
+    """CLI plumbing: --column-width-mm N must set args.column_width_mm = N."""
     cfg = tmp_path / "config.yaml"
     cfg.write_text("species: {}\n")
     args = pdps.parse_args([
         "--config", str(cfg),
         "--directory", str(tmp_path),
-        "--sa-1-column",
+        "--column-width-mm", "90",
     ])
-    assert args.sa_1_column is True
+    assert args.column_width_mm == 90
+
+
+def test_plot_pairwise_decay_column_width_too_small_raises(tmp_path: Path):
+    """Width that leaves no room for axes raises ValueError."""
+    sp1 = "Pectenmaximus-6579-GCF902652985.1"
+    animal = "GenericAnimal-1234-GCF000000001.1"
+    animal_tsv = tmp_path / "animal.tsv"
+    _write_decay_tsv(animal_tsv,
+                     divergence_time=500.0,
+                     genes_per_chrom=[100, 100],
+                     conserved_per_chrom=[70, 80])
+    filestruct = {sp1: {animal: str(animal_tsv)}}
+    with pytest.raises(ValueError, match="too small"):
+        pdps.plot_pairwise_decay_sp1_vs_all(
+            sp1, filestruct, outdir=str(tmp_path / "out"),
+            column_width_mm=10,
+        )

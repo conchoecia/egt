@@ -222,7 +222,7 @@ def test_main_orchestrates_with_stubbed_helpers(monkeypatch, tmp_path: Path):
         ALG_rbh=str(tmp_path / "alg.rbh"),
         ALGname="ALG",
         ALG_rbh_dir=str(tmp_path / "algdir"),
-        sa_1_column=False,
+        column_width_mm=None,
     )
 
     monkeypatch.setattr(pdps, "parse_args", lambda argv=None: args)
