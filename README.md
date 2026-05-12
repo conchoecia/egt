@@ -2,6 +2,8 @@
 
 ![Coverage](images/coverage-badge.svg)
 
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 `egt` is a Python / Snakemake analysis toolkit for characterizing
 chromosome evolution across metazoan genomes. It builds on reciprocal-best-hits
 data from [`odp`](https://github.com/conchoecia/odp) and provides tools for:
