@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "egt"
-version = "0.2.1"
+version = "0.2.2"
 description = "Evolutionary Genome Topology — analysis toolkit for chromosome evolution across metazoan genomes using reciprocal-best-hits data."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -87,7 +87,7 @@ addopts = "-v --tb=short"
 # creates a v<NEW> tag. Push with `git push --follow-tags` (or use the
 # `--push` flag if a release remote is configured).
 [tool.bumpversion]
-current_version = "0.2.1"
+current_version = "0.2.2"
 parse = '(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)'
 serialize = ["{major}.{minor}.{patch}"]
 commit = true
