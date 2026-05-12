@@ -8,6 +8,8 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-12
+
 ### Added
 - `tests/test_dispersal.py` — 9 tests / 20 parametrized cases covering bin coverage gap, bin edge inclusion, `num_algs_detected` invariant, divergence-loader failure modes, presence-fusions meta-column deny-list, `1 − n_alg / 29` default formula, figure-close hygiene, and a regression guard banning the literal `"dispersion"` anywhere in `src/egt/`.
 - `tests/test_dispersal_panel_style.py` — 24 cases covering density-alpha math (empty input, clamp, inverse-density, sqrt scaling, reference modes, error cases), `rgba_array` shape, `apply_rc` rcParams, `style_axes` spines, holozoan-constant key consistency, Creolimax pass-through, `--column-width-mm` emit, `--axes-aspect` override, CLI plumbing.
