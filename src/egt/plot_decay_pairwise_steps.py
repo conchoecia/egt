@@ -26,7 +26,7 @@ import random
 import sys
 
 from egt import rbh_tools
-from egt.plot import (
+from egt.dispersal_panel_style import (
     ANIMAL_COLOR,
     HOLOZOAN_COLORS,
     HOLOZOAN_LABELS,

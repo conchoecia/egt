@@ -1,4 +1,4 @@
-"""Tests for the new egt.plot subpackage (density_alpha + style)
+"""Tests for the new egt.dispersal_panel_style module (density_alpha + style)
 and the Science Advances upgrade to plot_pairwise_decay_sp1_vs_all.
 
 Covers:
@@ -35,7 +35,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from egt import plot_decay_pairwise_steps as pdps
-from egt.plot import (
+from egt.dispersal_panel_style import (
     ANIMAL_COLOR,
     HOLOZOAN_COLORS,
     HOLOZOAN_LABELS,
