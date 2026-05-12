@@ -29,6 +29,16 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
+    # `environment: pypi` gates publishing behind the `pypi` GitHub
+    # environment, which has a "Deployment branches and tags" rule
+    # restricting it to tag refs matching `v*`. Combined with PyPI's
+    # trusted-publisher registration (Owner `conchoecia`, Repo `egt`,
+    # Workflow `publish.yml`, Environment `pypi`), only a tagged
+    # release running this exact workflow can mint the short-lived
+    # OIDC token PyPI requires for upload. No long-lived API token.
+    environment: pypi
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -38,5 +48,3 @@ jobs:
       - run: python -m build
       - run: python -m twine check dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.EGT_PYPI_TOKEN }}
