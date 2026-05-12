@@ -51,6 +51,9 @@ dependencies = [
 dev = [
   "pytest>=7.0",
   "pytest-cov",
+  # pytest-xdist enables `pytest -n auto` for in-job parallelism; CI
+  # uses this to cut wall-clock time on the matrix.
+  "pytest-xdist",
   # Required by the GO-enrichment test suite:
   # - openpyxl: .xlsx fixture reads (tests/test_go_io.py,
   #             test_go_benchmark_camps.py, test_go_benchmark_simakov.py)

@@ -9,6 +9,12 @@ on:
 permissions:
   contents: write
 
+# Cancel in-flight runs on the same ref when a new commit lands. Saves
+# CI minutes during force-pushes / rapid pushes on a PR branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # Opt in early to Node 24 for JS actions that still bundle Node 20
   # (e.g. stefanzweifel/git-auto-commit-action@v5). GitHub will flip
@@ -45,7 +51,7 @@ jobs:
         run: python -m compileall -q src/egt
 
       - name: Run test suite (with coverage)
-        run: pytest tests/ -v --tb=short --cov=egt --cov-report=xml:coverage.xml --cov-report=term
+        run: pytest tests/ -n auto --tb=short --cov=egt --cov-report=xml:coverage.xml --cov-report=term
 
       - name: Generate coverage badge
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && github.ref == 'refs/heads/main' && github.event_name == 'push'
