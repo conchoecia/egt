@@ -72,10 +72,6 @@ from egt import rbh_tools
 from ete4 import NCBITaxa,Tree
 
 
-# get the warnings
-import warnings
-warnings.filterwarnings('error')
-
 # plotting options
 import matplotlib.pyplot as plt
 #import odp_plotting_functions as odp_plot

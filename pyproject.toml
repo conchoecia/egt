@@ -48,7 +48,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov", "bump-my-version"]
+dev = [
+  "pytest>=7.0",
+  "pytest-cov",
+  # Required by the GO-enrichment test suite:
+  # - openpyxl: .xlsx fixture reads (tests/test_go_io.py,
+  #             test_go_benchmark_camps.py, test_go_benchmark_simakov.py)
+  # - upsetplot: enrich.py's upsetplot panel (import-wrapped in src, but
+  #              the plots-smoke test still exercises the library branch)
+  # - goatools: benchmark_goatools_ref pytest.importorskip path
+  "openpyxl",
+  "upsetplot",
+  "goatools",
+  # Version bumping (bump-my-version reads [tool.bumpversion] below).
+  "bump-my-version",
+]
 
 [project.urls]
 Homepage = "https://github.com/conchoecia/egt"

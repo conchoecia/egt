@@ -1,0 +1,8 @@
+family_id	alg	human_gene	human_scaf	source	note
+FAM_A	A1a	NP_000001.1	NC_000001.1	human_rbh
+FAM_B	A1a	NP_000003.1	NC_000001.1	human_rbh
+FAM_C	A1b	NP_000005.1	NC_000002.1	human_rbh
+FAM_D	B1	sp|P12345|TEST_HUMAN	NC_000002.1	hmm_pass2
+FAM_E	B2	NP_777777.1	NC_000003.1	human_rbh
+FAM_F	B2		-	-
+FAM_G	C1	not_a_refseq_or_sp	-	-

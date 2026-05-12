@@ -14,7 +14,7 @@ def parse_changestring(changestring):
     """Parse a changestring and return list of (source, target, fusions, losses, splits)."""
     # Handle negative taxids (replace -- with -~)
     changestring_safe = changestring.replace('--', '-~')
-    parts = changestring_safe.split('-')
+    parts = changestring_safe.strip('-').split('-')
     
     branches = []
     

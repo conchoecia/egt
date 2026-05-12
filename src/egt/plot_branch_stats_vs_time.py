@@ -105,6 +105,8 @@ def renormalize_weights_for_clade(global_phylo_weighter, clade_tip_taxids, time_
     
     # Renormalize so weights average to 1.0 within this clade
     mean_weight = sum(clade_weights.values()) / len(clade_weights)
+    if not np.isfinite(mean_weight) or mean_weight == 0:
+        return {taxid: 1.0 for taxid in clade_weights}
     renormalized_weights = {taxid: weight / mean_weight 
                            for taxid, weight in clade_weights.items()}
     
@@ -430,7 +432,10 @@ class PhyloWeighting:
             # Normalize so mean = 1
             weights_array = np.array(list(weights_dict.values()))
             mean_weight = np.mean(weights_array)
-            weights_dict = {tip: weight / mean_weight for tip, weight in weights_dict.items()}
+            if not np.isfinite(mean_weight) or mean_weight == 0:
+                weights_dict = {tip: 1.0 for tip in weights_dict}
+            else:
+                weights_dict = {tip: weight / mean_weight for tip, weight in weights_dict.items()}
             
             if self.verbose:
                 print(f"Phylogenetic weights: min={min(weights_dict.values()):.3f}, mean=1.000, max={max(weights_dict.values()):.3f}")
@@ -476,7 +481,11 @@ class PhyloWeighting:
         
         # Normalize so mean = 1 (preserves total event counts)
         weights = np.array(weights)
-        weights = weights / np.mean(weights)
+        mean_weight = np.mean(weights)
+        if not np.isfinite(mean_weight) or mean_weight == 0:
+            weights = np.ones_like(weights, dtype=float)
+        else:
+            weights = weights / mean_weight
         
         print()  # New line after progress
         print(f"Phylogenetic weights: min={weights.min():.3f}, mean={weights.mean():.3f}, max={weights.max():.3f}")
@@ -1903,13 +1912,19 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
         cbar.set_label('Age (Mya)', fontsize=10)
         # Invert the colorbar labels to show actual ages (not negative)
         cbar_ticks = cbar.get_ticks()
+        cbar.set_ticks(cbar_ticks)
         cbar.set_ticklabels([f'{int(-t)}' for t in cbar_ticks])
 
         # increase the horizontal and vertical space between the panels
         plt.subplots_adjust(hspace=0.5, wspace=0.5)
 
         # save to a pdf with tight layout to prevent overlap
-        outpdf =  outprefix.rstrip(".pdf").rstrip(".tsv") + ".pdf"
+        outpdf = str(outprefix)
+        if outpdf.endswith(".pdf"):
+            outpdf = outpdf[:-4]
+        elif outpdf.endswith(".tsv"):
+            outpdf = outpdf[:-4]
+        outpdf = outpdf + ".pdf"
         plt.savefig(outpdf, facecolor='white', edgecolor='none', bbox_inches='tight')
         # close the figure to free up memory
         plt.close(fig)

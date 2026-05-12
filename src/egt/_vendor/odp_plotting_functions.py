@@ -3,6 +3,7 @@ These are the plotting functions used by many ODP programs
 """
 
 import matplotlib
+import pandas as pd
 
 def format_matplotlib():
     """format the fonts and print options for the plots"""

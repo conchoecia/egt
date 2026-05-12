@@ -3,6 +3,8 @@
 # Take in a list of datafraes from samples and constructs a comparison of the UMAP plots.
 """
 import argparse
+import ast
+from collections import Counter
 import numpy as np
 import os
 import pandas as pd
@@ -16,6 +18,7 @@ import matplotlib.colors as mcolors
 from matplotlib.colors import Normalize, LinearSegmentedColormap
 from matplotlib.cm import ScalarMappable
 from egt._vendor import odp_plotting_functions as odpf
+from egt.palette import add_palette_argument, load_palette
 
 # for the html version
 from bokeh.plotting import figure, output_file, save
@@ -174,6 +177,7 @@ def parse_args(argv=None):
     flstr += "  If you use this in combination with the --plot_features flag, this must only be one file."
     parser.add_argument("-f", "--filelist", help = flstr)
     parser.add_argument("-p", "--prefix",   help = "The pdf file to which we want to save our results.", required = True)
+    add_palette_argument(parser)
     mdstr  = "Optional metadata files with one 'rbh' column to join against the main dataframe, and other columns to annotate the plot."
     mdstr += "  If the metadata column does not contain an additional column called *_color, the dots will be assigned colors."
     mdstr += "  The colors will be assigned a gradient if numeric, or a random color if the column if categorical."
@@ -189,6 +193,15 @@ def parse_args(argv=None):
                         help="For --plot-phyla, also output a clean version without labels, vectors, or grid lines (saved as {prefix}_clean.pdf)")
     parser.add_argument("--phyla-order", type=str, default=None,
                         help="Space-delimited list of phyla names to plot in custom order (e.g., 'Chordata Arthropoda Mollusca'). Only specified phyla will be plotted. The 2x2 'All Phyla' panel will still be shown.")
+    parser.add_argument("--all-panel-span", type=int, default=2,
+                        help="Side length in grid cells for the large 'All Phyla' panel in --plot-phyla mode (default: 2).")
+    parser.add_argument("--color-source", type=str, default="df",
+                        choices=["df", "palette", "reference-df"],
+                        help="For --plot-phyla, use the existing dataframe color column ('df'), override colors from the shared palette ('palette'), or copy colors from another dataframe keyed by sample/rbh ('reference-df').")
+    parser.add_argument("--reference-df", type=str, default=None,
+                        help="Reference dataframe used when --color-source reference-df. Must contain 'color' plus either 'sample' or 'rbh'.")
+    parser.add_argument("--recolored-df-out", type=str, default=None,
+                        help="Optional path to write a copy of the input dataframe using the selected --color-source.")
     parser.add_argument("--genome-min-bp", type=float, default=None,
                         help="Minimum genome size (bp). Values <= this are shown as --genome-min-color (grey).")
     parser.add_argument("--genome-max-bp", type=float, default=None,
@@ -209,8 +222,22 @@ def parse_args(argv=None):
                           "cols=(n_neighbors,min_dist) inferred from filenames)."))
     parser.add_argument("--num-cols", type=int, default=None,
                         help="Number of columns for --plot_features or --plot-phyla grid layout. If not specified, uses sqrt of total panels (square grid).")
+    parser.add_argument("--phyla-manuscript-layout", action="store_true",
+                        help="For --plot-phyla, render the manuscript 4x4 all-samples panel plus a 3x4 right-side clade panel layout.")
+    parser.add_argument("--phyla-main-panel-output", type=str, default=None,
+                        help="Optional PDF path for a standalone 4x4 all-samples panel from --phyla-manuscript-layout.")
+    parser.add_argument("--phyla-main-panel-highlight-taxid", type=int, default=None,
+                        help="For --phyla-main-panel-output, highlight this lineage taxid and draw all other points grey.")
+    parser.add_argument("--main-panel-side-buffer", type=float, default=0.10,
+                        help="Extra x-axis padding fraction for the large panel in --phyla-manuscript-layout (default: 0.10).")
 
     args = parser.parse_args(argv)
+
+    if args.color_source == "reference-df":
+        if not args.reference_df:
+            raise ValueError("--reference-df is required when --color-source reference-df")
+        if not os.path.exists(args.reference_df):
+            raise ValueError(f"Reference dataframe does not exist: {args.reference_df}")
 
     # --- normalize --phylolist to a list of paths ---
     files = args.phylolist
@@ -284,6 +311,157 @@ def parse_args(argv=None):
     return args
 
 
+def _parse_lineage_taxids(row):
+    """Return lineage taxids in root-to-leaf order from a plotdf row."""
+    taxids = []
+
+    if "taxid_list" in row.index and pd.notna(row["taxid_list"]):
+        try:
+            raw_taxids = row["taxid_list"]
+            if isinstance(raw_taxids, str):
+                raw_taxids = ast.literal_eval(raw_taxids)
+            if isinstance(raw_taxids, list):
+                taxids = [int(x) for x in raw_taxids]
+        except (ValueError, SyntaxError, TypeError):
+            taxids = []
+
+    if not taxids and "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
+        try:
+            taxids = [int(x) for x in str(row["taxid_list_str"]).split(";") if x.strip()]
+        except ValueError:
+            taxids = []
+
+    return taxids
+
+
+def recolor_df_with_palette(df, palette):
+    """Return a copy of ``df`` with palette-resolved clade colors."""
+    recolored = df.copy()
+
+    if "taxid_list_str" not in recolored.columns and "taxid_list" not in recolored.columns:
+        raise ValueError(
+            "DataFrame must contain either 'taxid_list' or 'taxid_list_str' to recolor with the palette."
+        )
+
+    def _resolve_color(row):
+        if "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
+            return palette.for_lineage_string(row["taxid_list_str"]).color
+
+        taxids = _parse_lineage_taxids(row)
+        if not taxids:
+            return palette.fallback.color
+        return palette.for_lineage(reversed(taxids)).color
+
+    recolored["color"] = recolored.apply(_resolve_color, axis=1)
+    return recolored
+
+
+def recolor_df_from_reference_df(df, reference_df):
+    """Return a copy of ``df`` using colors looked up from ``reference_df``.
+
+    The lookup key is ``sample`` when present in both dataframes, otherwise
+    ``rbh`` when present in both. Unmatched rows keep their existing color if
+    available, otherwise fall back to ``#3f3f7f``.
+    """
+    if "color" not in reference_df.columns:
+        raise ValueError("Reference dataframe must contain a 'color' column.")
+
+    join_key = None
+    for candidate in ("sample", "rbh"):
+        if candidate in df.columns and candidate in reference_df.columns:
+            join_key = candidate
+            break
+    if join_key is None:
+        raise ValueError(
+            "Reference dataframe must share either a 'sample' or 'rbh' column with the input dataframe."
+        )
+
+    ref = reference_df[[join_key, "color"]].copy()
+    ref[join_key] = ref[join_key].astype(str).str.strip()
+    ref["color"] = ref["color"].astype(str).str.strip()
+
+    duplicate_colors = ref.groupby(join_key)["color"].nunique()
+    conflicting = duplicate_colors[duplicate_colors > 1]
+    if len(conflicting) > 0:
+        raise ValueError(
+            f"Reference dataframe has conflicting colors for {len(conflicting)} {join_key} entries."
+        )
+
+    color_lookup = ref.drop_duplicates(subset=[join_key]).set_index(join_key)["color"]
+
+    recolored = df.copy()
+    recolored[join_key] = recolored[join_key].astype(str).str.strip()
+    fallback_colors = (
+        recolored["color"].astype(str).str.strip()
+        if "color" in recolored.columns
+        else pd.Series(["#3f3f7f"] * len(recolored), index=recolored.index)
+    )
+    mapped = recolored[join_key].map(color_lookup)
+    recolored["color"] = mapped.fillna(fallback_colors)
+
+    matched = int(mapped.notna().sum())
+    print(
+        f"Reference color merge: matched {matched} of {len(recolored)} rows "
+        f"using '{join_key}' from the reference dataframe"
+    )
+    return recolored
+
+
+def _nearest_palette_taxid_at_or_above_anchor(taxids, anchor_taxid, palette):
+    """Return the nearest palette-covered taxid at/above ``anchor_taxid``.
+
+    ``taxids`` must be in root-to-leaf order. We look for the deepest occurrence
+    of ``anchor_taxid`` first, then walk back toward the root until we find a
+    palette-covered node.
+    """
+    if not taxids:
+        return None
+
+    try:
+        anchor_idx = max(i for i, tid in enumerate(taxids) if int(tid) == int(anchor_taxid))
+    except ValueError:
+        return None
+
+    for tid in reversed(taxids[: anchor_idx + 1]):
+        clade = palette.for_taxid(int(tid))
+        if clade != palette.fallback:
+            return clade.taxid
+    return None
+
+
+def resolve_palette_phylum_color(phylum_name, lineage_taxids, palette):
+    """Return a stable display color for a phylum in palette mode.
+
+    Preference order:
+      1. exact palette entry for the phylum taxid
+      2. nearest palette-covered ancestor above the phylum taxid, using the
+         most common result across the phylum's members
+      3. palette fallback color
+
+    Returns ``(color, taxid, label)`` for logging/debugging.
+    """
+    phylum_taxid = phylum_to_taxid[phylum_name]["taxid"]
+
+    clade = palette.for_taxid(phylum_taxid)
+    if clade != palette.fallback:
+        return clade.color, clade.taxid, clade.label
+
+    candidate_taxids = []
+    for taxids in lineage_taxids:
+        candidate_taxid = _nearest_palette_taxid_at_or_above_anchor(
+            taxids, phylum_taxid, palette
+        )
+        if candidate_taxid is not None:
+            candidate_taxids.append(candidate_taxid)
+
+    if not candidate_taxids:
+        return palette.fallback.color, palette.fallback.taxid, palette.fallback.label
+
+    representative_taxid, _ = Counter(candidate_taxids).most_common(1)[0]
+    clade = palette.for_taxid(representative_taxid)
+    return clade.color, clade.taxid, clade.label
+
+
 def generate_df_dict(args):
     if args.directory:
         df_filelist = [os.path.join(args.directory, f)
@@ -343,11 +521,7 @@ def generate_df_dict(args):
 
     return df_dict
 
-def set_square_limits(ax, x, y, q=(0.002, 0.998), pad=0.03):
-    """
-    Set per-axis limits using optional quantile clipping, then expand to a
-    square view with a small padding. Keeps aspect='equal'.
-    """
+def _get_square_limits(x, y, q=(0.002, 0.998), pad=0.03):
     import numpy as np
     x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
 
@@ -363,9 +537,17 @@ def set_square_limits(ax, x, y, q=(0.002, 0.998), pad=0.03):
     py = (y1 - y0) * pad
     cx, cy = 0.5*(x0 + x1), 0.5*(y0 + y1)
     side = max((x1 - x0) + 2*px, (y1 - y0) + 2*py)
+    return cx - side/2, cx + side/2, cy - side/2, cy + side/2
 
-    ax.set_xlim(cx - side/2, cx + side/2)
-    ax.set_ylim(cy - side/2, cy + side/2)
+
+def set_square_limits(ax, x, y, q=(0.002, 0.998), pad=0.03):
+    """
+    Set per-axis limits using optional quantile clipping, then expand to a
+    square view with a small padding. Keeps aspect='equal'.
+    """
+    xlo, xhi, ylo, yhi = _get_square_limits(x, y, q=q, pad=pad)
+    ax.set_xlim(xlo, xhi)
+    ax.set_ylim(ylo, yhi)
     ax.set_aspect("equal", adjustable="box")
 
 def auto_point_size(
@@ -412,6 +594,152 @@ def auto_point_size(
     elif s > max_size:
         s = max_size
     return float(s)
+
+
+def auto_point_alpha(
+    n_points: int,
+    *,
+    n_ref: int = 2000,
+    alpha_ref: float = 0.50,
+    power: float = 0.27,
+    min_alpha: float = 0.40,
+    max_alpha: float = 0.84,
+) -> float:
+    """
+    Return a panel-level alpha for scatter points.
+
+    Sparse phylogenetic resampling panels have less local overplotting than dense
+    ones, so they need more opacity to reach comparable perceived intensity. The
+    defaults were tuned against the neighbors=20 phylo-resampling panels, whose
+    occupied-pixel darkness provides a good visual reference for the denser ranks.
+    """
+    if n_points <= 0:
+        return max_alpha
+
+    alpha = alpha_ref * (float(n_ref) / float(n_points)) ** power
+    if alpha < min_alpha:
+        alpha = min_alpha
+    elif alpha > max_alpha:
+        alpha = max_alpha
+    return float(alpha)
+
+
+def auto_point_fill(
+    n_points: int,
+    *,
+    n_ref: int = 2000,
+    fill_ref: float = 0.20,
+    power: float = 0.33,
+    min_fill: float = 0.20,
+    max_fill: float = 0.48,
+) -> float:
+    """
+    Return a panel-level target fill fraction for scatter points.
+
+    Sparse panels need a larger effective footprint than dense panels to keep
+    the occupied part of each subplot visually substantial. The defaults were
+    tuned against the neighbors=20 phylo-resampling grid.
+    """
+    if n_points <= 0:
+        return max_fill
+
+    fill = fill_ref * (float(n_ref) / float(n_points)) ** power
+    if fill < min_fill:
+        fill = min_fill
+    elif fill > max_fill:
+        fill = max_fill
+    return float(fill)
+
+
+def estimate_panel_occupancy(x, y, *, q=(0.002, 0.998), pad=0.03, bins=40) -> float:
+    """
+    Estimate how much of the square plotting area is occupied by points.
+
+    Values near 0 indicate a compact panel; larger values indicate a more
+    spatially spread-out point cloud.
+    """
+    import numpy as np
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) == 0:
+        return 0.0
+
+    xlo, xhi, ylo, yhi = _get_square_limits(x, y, q=q, pad=pad)
+    xn = np.clip((x - xlo) / (xhi - xlo), 0.0, 1.0)
+    yn = np.clip((y - ylo) / (yhi - ylo), 0.0, 1.0)
+    hist, _, _ = np.histogram2d(xn, yn, bins=bins, range=[[0, 1], [0, 1]])
+    return float((hist > 0).mean())
+
+
+def occupancy_scaled_value(
+    value: float,
+    occupancy: float,
+    *,
+    n_points: int,
+    min_n_points: int = 300,
+    occ_ref: float = 0.24,
+    power: float = 0.35,
+    min_factor: float = 0.92,
+    max_factor: float = 1.16,
+) -> float:
+    """
+    Scale a size/alpha control by the actual panel footprint.
+
+    Spread-out panels need more ink; compact panels need less. We only apply
+    this once a panel has enough points for occupancy to be a stable signal.
+    """
+    if n_points < min_n_points or occupancy <= 0:
+        return float(value)
+
+    factor = (occupancy / occ_ref) ** power
+    if factor < min_factor:
+        factor = min_factor
+    elif factor > max_factor:
+        factor = max_factor
+    return float(value * factor)
+
+
+def neighbor_scaled_value(
+    value: float,
+    num_neighbors: int,
+    n_points: int,
+    *,
+    min_neighbors: int = 20,
+    max_neighbors: int = 250,
+) -> float:
+    """
+    Apply a coarse banded correction based on neighbor count and panel sparsity.
+
+    This lets sparse upper ranks stay visible, tones down compact mid-sparse
+    rows, and gradually boosts spread-prone medium-density rows as n_neighbors
+    increases from left to right.
+    """
+    import math
+
+    if value <= 0 or n_points <= 0:
+        return float(value)
+
+    nn = min(max(num_neighbors, min_neighbors), max_neighbors)
+    if max_neighbors <= min_neighbors:
+        t = 0.0
+    else:
+        t = (math.log(nn) - math.log(min_neighbors)) / (math.log(max_neighbors) - math.log(min_neighbors))
+
+    if n_points <= 130:
+        factor = 1.30
+    elif n_points <= 180:
+        factor = 1.10
+    elif n_points <= 280:
+        factor = 1.01 + 0.09 * t
+    elif n_points <= 900:
+        factor = 0.92
+    elif n_points <= 3000:
+        factor = 0.96 + 0.18 * t
+    else:
+        factor = 1.0
+
+    return float(value * factor)
 
 def plot_paramsweep(df_dict, outpdf):
     """
@@ -994,9 +1322,6 @@ def plot_phyla(args, outpdf, metadata_df=None):
     Parses taxid information from 'taxid_list' or 'taxid_list_str' columns.
     Uses the phylum_to_taxid dictionary to map taxids to phyla.
     """
-    from matplotlib.backends.backend_pdf import PdfPages
-    import ast
-    
     GREY_COLOR = "#D5D7DF"
     
     # Create reverse mapping: taxid -> phylum name
@@ -1020,30 +1345,32 @@ def plot_phyla(args, outpdf, metadata_df=None):
     # Check for required columns
     if "UMAP1" not in df.columns or "UMAP2" not in df.columns:
         raise ValueError("DataFrame must contain 'UMAP1' and 'UMAP2' columns")
+
+    color_source = getattr(args, "color_source", "df")
+    palette = None
+    if color_source == "palette":
+        palette = load_palette(getattr(args, "palette", None))
+        df = recolor_df_with_palette(df, palette)
+    elif color_source == "reference-df":
+        reference_df = pd.read_csv(getattr(args, "reference_df"), sep="\t", index_col=0)
+        df = recolor_df_from_reference_df(df, reference_df)
+    elif color_source != "df":
+        raise ValueError(f"Unsupported color_source: {color_source}")
+    elif "color" not in df.columns:
+        print("No existing color column found; falling back to palette-derived colors.")
+        palette = load_palette(getattr(args, "palette", None))
+        df = recolor_df_with_palette(df, palette)
+
+    recolored_df_out = getattr(args, "recolored_df_out", None)
+    if recolored_df_out:
+        df.to_csv(recolored_df_out, sep="\t")
+        print(f"Wrote recolored dataframe to {recolored_df_out}")
     
     # Parse taxid information to determine phylum
-    def parse_taxids(row):
+    def parse_taxids(taxids):
         """Parse taxid_list or taxid_list_str to extract phylum.
         Returns the most specific (last/deepest) phylum match in the lineage."""
-        taxids = []
-        
-        # Try taxid_list first (format: "[1, 131567, 2759, ...]")
-        if "taxid_list" in row.index and pd.notna(row["taxid_list"]):
-            try:
-                if isinstance(row["taxid_list"], str):
-                    taxids = ast.literal_eval(row["taxid_list"])
-                elif isinstance(row["taxid_list"], list):
-                    taxids = row["taxid_list"]
-            except Exception as e:
-                pass  # silently skip parse errors
-        
-        # Try taxid_list_str if taxid_list didn't work (format: "1;131567;2759;...")
-        if not taxids and "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
-            try:
-                taxids = [int(x) for x in str(row["taxid_list_str"]).split(";") if x.strip()]
-            except Exception as e:
-                pass  # silently skip parse errors
-        
+
         # Special case: Acanthocephala (taxid 10232) is now considered part of Rotifera
         # Check for this taxid first before doing normal phylum lookup
         if 10232 in taxids:
@@ -1064,7 +1391,8 @@ def plot_phyla(args, outpdf, metadata_df=None):
     
     # Parse phylum for each row
     print("Parsing taxid information to determine phyla...")
-    df["phylum"] = df.apply(parse_taxids, axis=1)
+    df["_lineage_taxids"] = df.apply(_parse_lineage_taxids, axis=1)
+    df["phylum"] = df["_lineage_taxids"].apply(parse_taxids)
     
     # Get unique phyla present in the data
     phyla_in_data_original = df["phylum"].dropna().unique()
@@ -1151,23 +1479,27 @@ def plot_phyla(args, outpdf, metadata_df=None):
     
     print(f"Found {len(phyla_in_data_all)} unique phyla in data: {sorted(phyla_in_data_all)}")
     
-    # Generate colors for each phylum
-    # If the dataframe has a 'color' column, use those colors directly for plotting
-    # Otherwise, generate distinct colors for each phylum
+    # Generate colors for each phylum only as a fallback. The actual plotting
+    # path should use per-row colors whenever the dataframe has a "color"
+    # column; that preserves the hierarchical "most specific palette hit wins"
+    # logic in the All panel and in highlighted panels.
     if "color" in df.columns:
-        # Use the existing color column directly - each sample keeps its own color
-        # This preserves the original taxonomic-specific colors
         use_existing_colors = True
-        phylum_colors = {}  # We'll still need this for the legend/reference
+        phylum_colors = {}
         for phylum in phyla_in_data_all:
             phylum_mask = df["phylum"] == phylum
             if phylum_mask.any():
-                # Get the most common color for this phylum (for legend purposes)
                 colors = df.loc[phylum_mask, "color"].mode()
                 if len(colors) > 0:
                     phylum_colors[phylum] = colors.iloc[0]
                 else:
                     phylum_colors[phylum] = "#000000"
+        if color_source == "palette":
+            print(
+                "\nUsing palette-resolved per-row colors for the All panel and "
+                "for highlighted points; only non-highlighted background points "
+                "are greyed out in side panels."
+            )
     else:
         # Generate distinct colors for each phylum
         use_existing_colors = False
@@ -1289,15 +1621,255 @@ def plot_phyla(args, outpdf, metadata_df=None):
         use_square_panels = True
         panel_aspect_ratio = 1.0
         print(f"  Using square panels")
+
+    if getattr(args, "phyla_manuscript_layout", False):
+        clades = [
+            ("Deuterostomia", lambda tx: 33511 in tx),
+            ("Protostomia", lambda tx: 33317 in tx),
+            ("Non-Bilateria", lambda tx: 33208 in tx and 33213 not in tx),
+            ("Sauropsida", lambda tx: 8457 in tx),
+            ("Arthropoda", lambda tx: 6656 in tx),
+            ("Porifera", lambda tx: 6040 in tx),
+            ("Mammalia", lambda tx: 40674 in tx),
+            ("Lepidoptera", lambda tx: 7088 in tx),
+            ("Cnidaria", lambda tx: 6073 in tx),
+            ("Fishes", lambda tx: 7742 in tx and 32523 not in tx),
+            ("Spiralia", lambda tx: 2697495 in tx),
+            ("Ctenophora", lambda tx: 10197 in tx),
+        ]
+        clade_keys = []
+        for label, predicate in clades:
+            key = label.replace("\n", " ")
+            clade_keys.append(key)
+            df[f"_is_{key}"] = df["_lineage_taxids"].apply(predicate)
+            print(f"  - {key}: {int(df[f'_is_{key}'].sum())} samples")
+
+        cell_w = 1.45
+        cell_h = 1.45
+        gap = 0.18
+        margin_l = 0.45
+        margin_r = 0.20
+        margin_b = 0.35
+        margin_t = 0.35
+        num_cols = 7
+        num_rows = 4
+        fig_width = margin_l + margin_r + num_cols * cell_w + (num_cols - 1) * gap
+        fig_height = margin_b + margin_t + num_rows * cell_h + (num_rows - 1) * gap
+
+        def add_cell_axes(fig_new, row, col, rowspan=1, colspan=1):
+            left = margin_l + col * (cell_w + gap)
+            bottom = fig_height - margin_t - (row + rowspan) * cell_h - row * gap - (rowspan - 1) * gap
+            width = colspan * cell_w + (colspan - 1) * gap
+            height = rowspan * cell_h + (rowspan - 1) * gap
+            return fig_new.add_axes([left / fig_width, bottom / fig_height, width / fig_width, height / fig_height])
+
+        def set_main_limits_with_side_buffer(ax):
+            set_square_limits(ax, df["UMAP1"], df["UMAP2"], q=None, pad=0.01)
+            x0, x1 = ax.get_xlim()
+            y0, y1 = ax.get_ylim()
+            xpad = max(0.0, float(getattr(args, "main_panel_side_buffer", 0.10))) * (x1 - x0)
+            ax.set_xlim(x0 - xpad, x1 + xpad)
+            new_width = (x1 - x0) + 2 * xpad
+            y_mid = (y0 + y1) / 2
+            ax.set_ylim(y_mid - new_width / 2, y_mid + new_width / 2)
+            ax.set_aspect("equal", adjustable="box")
+
+        def draw_main_panel(ax_large, include_labels=True, include_vectors=True, highlight_taxid=None):
+            if highlight_taxid is None:
+                ax_large.scatter(
+                    df["UMAP1"],
+                    df["UMAP2"],
+                    s=0.95 * 16,
+                    lw=0,
+                    alpha=0.58,
+                    color=df["color"],
+                )
+            else:
+                highlight_mask = df["_lineage_taxids"].apply(lambda tx: int(highlight_taxid) in tx).to_numpy(bool)
+                ax_large.scatter(
+                    df.loc[~highlight_mask, "UMAP1"],
+                    df.loc[~highlight_mask, "UMAP2"],
+                    s=0.95 * 16,
+                    lw=0,
+                    alpha=0.25,
+                    color=GREY_COLOR,
+                    zorder=1,
+                )
+                ax_large.scatter(
+                    df.loc[highlight_mask, "UMAP1"],
+                    df.loc[highlight_mask, "UMAP2"],
+                    s=0.95 * 16,
+                    lw=0,
+                    alpha=0.82,
+                    color=df.loc[highlight_mask, "color"],
+                    zorder=2,
+                )
+            set_main_limits_with_side_buffer(ax_large)
+            ax_large.set_xticks([])
+            ax_large.set_yticks([])
+            for spine in ax_large.spines.values():
+                spine.set_visible(False)
+            if include_labels:
+                ax_large.text(
+                    0.5,
+                    1.0,
+                    "All samples",
+                    transform=ax_large.transAxes,
+                    ha="center",
+                    va="top",
+                    fontsize=12,
+                    fontweight="bold",
+                )
+            if include_vectors:
+                xlim = ax_large.get_xlim()
+                ylim = ax_large.get_ylim()
+                arrow_scale = 0.12 * min(xlim[1] - xlim[0], ylim[1] - ylim[0])
+                arrow_origin_x = xlim[0] + 0.10 * (xlim[1] - xlim[0])
+                arrow_origin_y = ylim[0] + 0.10 * (ylim[1] - ylim[0])
+                ax_large.arrow(
+                    arrow_origin_x,
+                    arrow_origin_y,
+                    original_x_axis[0] * arrow_scale,
+                    original_x_axis[1] * arrow_scale,
+                    head_width=arrow_scale * 0.12,
+                    head_length=arrow_scale * 0.18,
+                    fc="red",
+                    ec="red",
+                    alpha=0.7,
+                    lw=1.2,
+                )
+                ax_large.arrow(
+                    arrow_origin_x,
+                    arrow_origin_y,
+                    original_y_axis[0] * arrow_scale,
+                    original_y_axis[1] * arrow_scale,
+                    head_width=arrow_scale * 0.12,
+                    head_length=arrow_scale * 0.18,
+                    fc="blue",
+                    ec="blue",
+                    alpha=0.7,
+                    lw=1.2,
+                )
+                ax_large.text(
+                    arrow_origin_x + original_x_axis[0] * arrow_scale * 1.25,
+                    arrow_origin_y + original_x_axis[1] * arrow_scale * 1.25,
+                    "UMAP1",
+                    fontsize=7,
+                    color="red",
+                    ha="center",
+                    va="center",
+                )
+                ax_large.text(
+                    arrow_origin_x + original_y_axis[0] * arrow_scale * 1.25,
+                    arrow_origin_y + original_y_axis[1] * arrow_scale * 1.25,
+                    "UMAP2",
+                    fontsize=7,
+                    color="blue",
+                    ha="center",
+                    va="center",
+                )
+
+        def create_main_panel_figure():
+            main_panel_side = 4 * cell_w + 3 * gap
+            fig_new = plt.figure(figsize=(main_panel_side, main_panel_side), facecolor="white")
+            ax_large = fig_new.add_axes([0, 0, 1, 1])
+            draw_main_panel(
+                ax_large,
+                include_labels=False,
+                include_vectors=False,
+                highlight_taxid=getattr(args, "phyla_main_panel_highlight_taxid", None),
+            )
+            return fig_new
+
+        def create_manuscript_figure(include_labels=True, include_grid=True, include_vectors=True):
+            fig_new = plt.figure(figsize=(fig_width, fig_height), facecolor="white")
+            ax_large = add_cell_axes(fig_new, 0, 0, rowspan=4, colspan=4)
+            draw_main_panel(ax_large, include_labels=include_labels, include_vectors=include_vectors)
+
+            for idx, (label, _) in enumerate(clades):
+                row = idx // 3
+                col = 4 + (idx % 3)
+                key = clade_keys[idx]
+                mask = df[f"_is_{key}"].to_numpy(bool)
+                ax = add_cell_axes(fig_new, row, col)
+                ax.scatter(
+                    df.loc[~mask, "UMAP1"],
+                    df.loc[~mask, "UMAP2"],
+                    s=0.75,
+                    lw=0,
+                    alpha=0.28,
+                    color=GREY_COLOR,
+                    zorder=1,
+                )
+                ax.scatter(
+                    df.loc[mask, "UMAP1"],
+                    df.loc[mask, "UMAP2"],
+                    s=1.6,
+                    lw=0,
+                    alpha=0.82,
+                    color=df.loc[mask, "color"],
+                    zorder=2,
+                )
+                set_square_limits(ax, df["UMAP1"], df["UMAP2"], q=None, pad=0.01)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+                if include_labels:
+                    ax.text(
+                        0.5,
+                        1.0,
+                        f"{label}\nn = {int(mask.sum())}",
+                        transform=ax.transAxes,
+                        fontsize=7,
+                        ha="center",
+                        va="top",
+                        multialignment="center",
+                    )
+
+            if include_grid:
+                line_color = "#BBBBBB"
+                x_left_right_panel = (margin_l + 4 * cell_w + 3.5 * gap) / fig_width
+                x_right = 1 - margin_r / fig_width
+                y_bottom = margin_b / fig_height
+                y_top = 1 - margin_t / fig_height
+                for col in range(5, num_cols):
+                    x = (margin_l + col * cell_w + (col - 0.5) * gap) / fig_width
+                    fig_new.add_artist(plt.Line2D([x, x], [y_bottom, y_top], transform=fig_new.transFigure, color=line_color, lw=0.8))
+                for row in range(1, num_rows):
+                    y = (margin_b + (num_rows - row) * cell_h + (num_rows - row - 0.5) * gap) / fig_height
+                    fig_new.add_artist(plt.Line2D([x_left_right_panel, x_right], [y, y], transform=fig_new.transFigure, color=line_color, lw=0.8))
+                fig_new.add_artist(plt.Line2D([x_left_right_panel, x_left_right_panel], [y_bottom, y_top], transform=fig_new.transFigure, color=line_color, lw=0.8))
+
+            return fig_new
+
+        print(f"Saving manuscript phyla plot to {outpdf}")
+        fig = create_manuscript_figure(include_labels=True, include_grid=True, include_vectors=True)
+        fig.savefig(outpdf)
+        plt.close(fig)
+        if args.phyla_clean_output:
+            clean_outpdf = outpdf.replace(".pdf", "_clean.pdf")
+            print(f"Saving clean manuscript phyla plot to {clean_outpdf}")
+            fig_clean = create_manuscript_figure(include_labels=False, include_grid=False, include_vectors=False)
+            fig_clean.savefig(clean_outpdf)
+            plt.close(fig_clean)
+        if getattr(args, "phyla_main_panel_output", None):
+            print(f"Saving standalone manuscript main panel to {args.phyla_main_panel_output}")
+            fig_main = create_main_panel_figure()
+            fig_main.savefig(args.phyla_main_panel_output)
+            plt.close(fig_main)
+        return
     
-    # Calculate grid layout - "All Phyla" will be 2x2, others are 1x1
-    # The "All Phyla" panel takes up 4 slots (positions 0,0 to 1,1)
+    all_panel_span = max(1, int(getattr(args, "all_panel_span", 2)))
+
+    # Calculate grid layout - "All Phyla" occupies all_panel_span x all_panel_span,
+    # others are 1x1.
     num_phyla_panels = len(phyla_in_data)
     
     # Calculate grid size: we need space for num_phyla_panels regular panels 
-    # plus the 2x2 "All Phyla" panel (which uses 4 grid positions but counts as 1 panel)
-    # We'll add 3 to account for the 4 slots used by the large panel
-    total_grid_slots = num_phyla_panels + 3
+    # plus the large "All Phyla" panel (which uses all_panel_span^2 slots but
+    # counts as 1 panel).
+    total_grid_slots = num_phyla_panels + (all_panel_span * all_panel_span) - 1
     
     # Respect --num-cols if provided, otherwise calculate from sqrt
     if args.num_cols is not None:
@@ -1307,11 +1879,11 @@ def plot_phyla(args, outpdf, metadata_df=None):
     
     num_rows = int(np.ceil(total_grid_slots / num_cols))
     
-    # Ensure we have at least 2 rows and 2 cols for the large panel
-    if num_cols < 2:
-        num_cols = 2
-    if num_rows < 2:
-        num_rows = 2
+    # Ensure we have enough rows/cols for the large panel.
+    if num_cols < all_panel_span:
+        num_cols = all_panel_span
+    if num_rows < all_panel_span:
+        num_rows = all_panel_span
     
     # Figure dimensions - adjust based on panel aspect ratio
     margin = 0.25
@@ -1341,12 +1913,15 @@ def plot_phyla(args, outpdf, metadata_df=None):
             matplotlib figure object
         """
         fig_new = plt.figure(figsize=(fig_width, fig_height))
+        outline_only_mode = (not include_points) and include_grid
+        outline_color = "#B8BDC8"
+        outline_lw = 0.8
         
         # Create axes grid - regular sized panels
         axes_new = [[None for _ in range(num_cols)] for _ in range(num_rows)]
         for ii in range(num_rows):
             for jj in range(num_cols):
-                if ii < 2 and jj < 2:
+                if ii < all_panel_span and jj < all_panel_span:
                     continue
                 left = (4 * margin) + (jj * panel_width) + (jj * margin)
                 bottom = fig_height - ((4 * margin) + ((ii + 1) * panel_height) + (ii * margin))
@@ -1359,14 +1934,19 @@ def plot_phyla(args, outpdf, metadata_df=None):
                 ax.set_xticks([])
                 ax.set_yticks([])
                 for spine in ["top", "right", "bottom", "left"]:
-                    ax.spines[spine].set_visible(False)
+                    ax.spines[spine].set_visible(outline_only_mode)
+                    if outline_only_mode:
+                        ax.spines[spine].set_color(outline_color)
+                        ax.spines[spine].set_linewidth(outline_lw)
                 axes_new[ii][jj] = ax
         
-        # Create the large "All Phyla" panel spanning 2x2 in top-left
+        # Create the large "All Phyla" panel spanning all_panel_span x all_panel_span
         left_large = (4 * margin)
-        bottom_large = fig_height - ((4 * margin) + (2 * panel_height) + (1 * margin))
-        width_large = (2 * panel_width) + margin
-        height_large = (2 * panel_height) + margin
+        bottom_large = fig_height - (
+            (4 * margin) + (all_panel_span * panel_height) + ((all_panel_span - 1) * margin)
+        )
+        width_large = (all_panel_span * panel_width) + ((all_panel_span - 1) * margin)
+        height_large = (all_panel_span * panel_height) + ((all_panel_span - 1) * margin)
         ax_large_new = fig_new.add_axes([
             left_large / fig_width,
             bottom_large / fig_height,
@@ -1376,7 +1956,10 @@ def plot_phyla(args, outpdf, metadata_df=None):
         ax_large_new.set_xticks([])
         ax_large_new.set_yticks([])
         for spine in ["top", "right", "bottom", "left"]:
-            ax_large_new.spines[spine].set_visible(False)
+            ax_large_new.spines[spine].set_visible(outline_only_mode)
+            if outline_only_mode:
+                ax_large_new.spines[spine].set_color(outline_color)
+                ax_large_new.spines[spine].set_linewidth(outline_lw)
         
         # Add figure title if requested
         if include_labels:
@@ -1448,7 +2031,7 @@ def plot_phyla(args, outpdf, metadata_df=None):
         phylum_idx_new = 0
         for ii in range(num_rows):
             for jj in range(num_cols):
-                if ii < 2 and jj < 2:
+                if ii < all_panel_span and jj < all_panel_span:
                     continue
                 if phylum_idx_new >= len(phyla_in_data):
                     break
@@ -1525,45 +2108,33 @@ def plot_phyla(args, outpdf, metadata_df=None):
             for jj in range(1, num_cols):
                 x_pos = ((4 * margin) + (jj * panel_width) + (jj * margin) - (margin / 2)) / fig_width
                 
-                if jj < 2:
-                    y_top = ((fig_height - ((4 * margin) + (2 * panel_height) + (2 * margin))) / fig_height)
+                if jj < all_panel_span:
+                    y_top = bottom_large / fig_height
                     y_bottom = ((4 * margin) / fig_height)
-                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
-                    fig_new.add_artist(line)
-                elif jj == 2:
-                    y_top = ((fig_height - (4 * margin)) / fig_height)
-                    y_bottom = ((4 * margin) / fig_height)
-                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
                 else:
                     y_top = ((fig_height - (4 * margin)) / fig_height)
                     y_bottom = ((4 * margin) / fig_height)
-                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
             
             for ii in range(1, num_rows):
                 y_pos = ((fig_height - ((4 * margin) + (ii * panel_height) + (ii * margin) - (margin / 2))) / fig_height)
                 
-                if ii < 2:
-                    x_left = ((4 * margin) + (2 * panel_width) + (2 * margin)) / fig_width
+                if ii < all_panel_span:
+                    x_left = (left_large + width_large) / fig_width
                     x_right = ((fig_width - (4 * margin)) / fig_width)
-                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
-                    fig_new.add_artist(line)
-                elif ii == 2:
-                    x_left = ((4 * margin) / fig_width)
-                    x_right = ((fig_width - (4 * margin)) / fig_width)
-                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
                 else:
                     x_left = ((4 * margin) / fig_width)
                     x_right = ((fig_width - (4 * margin)) / fig_width)
-                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
-                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos],
+                                      transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
                     fig_new.add_artist(line)
         
         return fig_new
@@ -1571,7 +2142,7 @@ def plot_phyla(args, outpdf, metadata_df=None):
     # Create and save the main figure with all elements
     fig = create_phyla_figure(include_points=True, include_labels=True, include_grid=True, include_vectors=True)
     print(f"Saving phyla plot to {outpdf}")
-    plt.savefig(outpdf)
+    fig.savefig(outpdf)
     print(f"Saved phyla plot to {outpdf}")
     
     # If clean output requested, create additional versions
@@ -1581,18 +2152,9 @@ def plot_phyla(args, outpdf, metadata_df=None):
         print(f"\nCreating clean version without annotations...")
         fig_clean = create_phyla_figure(include_points=True, include_labels=False, include_grid=False, include_vectors=False)
         print(f"Saving clean phyla plot to {clean_outpdf}")
-        plt.savefig(clean_outpdf)
+        fig_clean.savefig(clean_outpdf)
         print(f"Saved clean phyla plot to {clean_outpdf}")
         plt.close(fig_clean)
-        
-        # Annotations-only version: all annotations, no data points
-        annotations_outpdf = outpdf.replace('.pdf', '_annotations.pdf')
-        print(f"\nCreating annotations-only version (no data points)...")
-        fig_annot = create_phyla_figure(include_points=False, include_labels=True, include_grid=True, include_vectors=True)
-        print(f"Saving annotations-only phyla plot to {annotations_outpdf}")
-        plt.savefig(annotations_outpdf)
-        print(f"Saved annotations-only phyla plot to {annotations_outpdf}")
-        plt.close(fig_annot)
     
     plt.close(fig)
 
@@ -1724,8 +2286,15 @@ def parse_metadata_dfs(df_filelist: list):
         # For all the columns that do not have a _color column, we will assign a color based on the values in the column.
         non_color_non_rbh_columns = [col for col in df.columns if col != "rbh" and not col.endswith("_color")]
         for thiscol in non_color_non_rbh_columns:
+            if f"{thiscol}_color" in df.columns:
+                continue
+            # Booleans should get contrasting categorical colors, not a numeric gradient.
+            if pd.api.types.is_bool_dtype(df[thiscol]):
+                tcolor = "#074FF7"
+                fcolor = "#FD6117"
+                df[f"{thiscol}_color"] = df[thiscol].map({True: tcolor, False: fcolor})
             # If the column is numeric, we will assign a gradient color
-            if pd.api.types.is_numeric_dtype(df[thiscol]):
+            elif pd.api.types.is_numeric_dtype(df[thiscol]):
                 # Get the min and max values of the column
                 vmin = df[thiscol].min()
                 vmax = df[thiscol].max()
@@ -1742,13 +2311,7 @@ def parse_metadata_dfs(df_filelist: list):
                     df[f"{thiscol}_color"] = "#000000"
                 elif len(unique_values) == 2:
                     # When there are only two things to color, blue/orange is a good contrasting choice that is colorblind-friendly.
-                    # If the column contains True/Fales values, color them with binary. In fact, if the column is boolean at all, just assign the two True/False colors randomly
-                    if set(unique_values).issubset({True, False}):
-                        # If the column is boolean, we will assign a color based on the True/False values
-                        df[f"{thiscol}_color"] = df[thiscol].map({True: tcolor, False: fcolor})
-                    else:
-                        # If there are only two unique values, we will assign tcolor or fcolor randomly
-                        df[f"{thiscol}_color"] = df[thiscol].apply(lambda x: tcolor if x == unique_values[0] else fcolor)
+                    df[f"{thiscol}_color"] = df[thiscol].apply(lambda x: tcolor if x == unique_values[0] else fcolor)
                 else:
                     # This column is not numeric and not boolean, so we will assign a random color to each unique value
                     # Generate a random color for each unique value. Use generate_random_color()
@@ -1879,6 +2442,12 @@ def plot_phylo_resampling_grid(
     inner=0.18,               # gap between panels (inches)
     outer=0.50,               # top/bottom and RIGHT margin (inches)
     left_gutter=1.20,         # reserved space for row labels (inches)
+    point_fill=0.20,
+    point_max_fill=0.48,
+    point_min_size=0.25,
+    point_max_size=13.0,
+    point_min_alpha=0.40,
+    point_max_alpha=0.84,
     sep_color="#BBBBBB",
     sep_lw=0.6
 ):
@@ -1935,16 +2504,66 @@ def plot_phylo_resampling_grid(
         for j, key in enumerate(all_params):
             ax = axes[i][j]
             info = by_param.get(key)
+            num_neighbors, _min_dist = key
             if info is None:
                 ax.text(0.5, 0.5, "—", ha="center", va="center", fontsize=8); continue
             d = info["df"]
-            s = auto_point_size(len(d), ax=ax)
+            n_points = len(d)
+            occupancy = estimate_panel_occupancy(d["UMAP1"].values, d["UMAP2"].values)
+            fill = auto_point_fill(
+                n_points,
+                fill_ref=point_fill,
+                max_fill=point_max_fill,
+            )
+            fill = occupancy_scaled_value(
+                fill,
+                occupancy,
+                n_points=n_points,
+                power=0.45,
+                min_factor=0.90,
+                max_factor=1.22,
+            )
+            fill = neighbor_scaled_value(fill, num_neighbors, n_points)
+            if n_points <= 130:
+                fill *= 1.55
+            elif n_points <= 180:
+                fill *= 1.18
+            this_point_max_size = point_max_size
+            if n_points <= 130:
+                this_point_max_size = max(point_max_size, 24.0)
+            elif n_points <= 180:
+                this_point_max_size = max(point_max_size, 18.0)
+            s = auto_point_size(
+                n_points,
+                ax=ax,
+                target_fill=fill,
+                min_size=point_min_size,
+                max_size=this_point_max_size,
+            )
+            alpha = auto_point_alpha(
+                n_points,
+                min_alpha=point_min_alpha,
+                max_alpha=point_max_alpha,
+            )
+            alpha = occupancy_scaled_value(
+                alpha,
+                occupancy,
+                n_points=n_points,
+                power=0.30,
+                min_factor=0.93,
+                max_factor=1.10,
+            )
+            alpha = neighbor_scaled_value(alpha, num_neighbors, n_points)
+            if alpha < point_min_alpha:
+                alpha = point_min_alpha
+            elif alpha > point_max_alpha:
+                alpha = point_max_alpha
             if d.empty:
                 ax.text(0.5, 0.5, "Empty", ha="center", va="center", fontsize=6); continue
             if "color" in d.columns:
-                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=0.5, color=d["color"])
+                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=alpha, color=d["color"], rasterized=True)
             else:
-                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=0.5)
+                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=alpha, rasterized=True)
 
             # square, per-axis limits
             # quantile-based, per-axis limits; square view to not distort the umap
@@ -1961,16 +2580,42 @@ def plot_phylo_resampling_grid(
     xmin, xmax = x_axes_left / fig_w,  x_axes_right / fig_w
     ymin, ymax = y_axes_bottom / fig_h, y_axes_top   / fig_h
 
-    # vertical separators (between columns)
-    for j in range(num_cols - 1):
-        x_mid = (left_gutter + (j + 1) * panel + j * inner + inner / 2) / fig_w
-        fig.add_artist(plt.Line2D([x_mid, x_mid], [ymin, ymax],
-                                  transform=fig.transFigure, color=sep_color, lw=sep_lw))
-    # horizontal separators (between rows)
-    for i in range(num_rows - 1):
-        y_mid = (outer + (i + 1) * panel + i * inner + inner / 2) / fig_h
-        fig.add_artist(plt.Line2D([xmin, xmax], [y_mid, y_mid],
-                                  transform=fig.transFigure, color=sep_color, lw=sep_lw))
+    x_mids = [
+        (left_gutter + (j + 1) * panel + j * inner + inner / 2) / fig_w
+        for j in range(num_cols - 1)
+    ]
+    y_mids = [
+        (outer + (i + 1) * panel + i * inner + inner / 2) / fig_h
+        for i in range(num_rows - 1)
+    ]
+    x_gap = min((inner / fig_w) * 0.55, (panel / fig_w) * 0.08)
+    y_gap = min((inner / fig_h) * 0.55, (panel / fig_h) * 0.08)
+
+    # vertical separators (between columns), broken at intersections
+    for x_mid in x_mids:
+        y_start = ymin
+        for y_mid in y_mids:
+            y_stop = y_mid - y_gap / 2
+            if y_stop > y_start:
+                fig.add_artist(plt.Line2D([x_mid, x_mid], [y_start, y_stop],
+                                          transform=fig.transFigure, color=sep_color, lw=sep_lw))
+            y_start = y_mid + y_gap / 2
+        if ymax > y_start:
+            fig.add_artist(plt.Line2D([x_mid, x_mid], [y_start, ymax],
+                                      transform=fig.transFigure, color=sep_color, lw=sep_lw))
+
+    # horizontal separators (between rows), broken at intersections
+    for y_mid in y_mids:
+        x_start = xmin
+        for x_mid in x_mids:
+            x_stop = x_mid - x_gap / 2
+            if x_stop > x_start:
+                fig.add_artist(plt.Line2D([x_start, x_stop], [y_mid, y_mid],
+                                          transform=fig.transFigure, color=sep_color, lw=sep_lw))
+            x_start = x_mid + x_gap / 2
+        if xmax > x_start:
+            fig.add_artist(plt.Line2D([x_start, xmax], [y_mid, y_mid],
+                                      transform=fig.transFigure, color=sep_color, lw=sep_lw))
 
     print(f"saving the file to {outpdf}")
     # IMPORTANT: don't use bbox_inches='tight' or it will clip your gutter

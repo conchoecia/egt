@@ -1,0 +1,8 @@
+#tax_id	GeneID	GO_ID	Evidence	Qualifier	GO_term	PubMed	Category
+9606	1000	GO:0000001	IEA	-	process-one	1	Process
+9606	1000	GO:0000002	IEA	-	function-one	2	Function
+9606	1001	GO:0000001	IEA	-	process-one	1	Process
+9606	1001	GO:0000003	IEA	NOT	should-be-skipped	3	Component
+9606	1002	GO:0000002	IEA	-	function-one	2	Function
+9606	1002	GO:0000004	IEA	-	component-one	4	Component
+9606	1003	GO:0000001	IEA	-	process-one	1	Process

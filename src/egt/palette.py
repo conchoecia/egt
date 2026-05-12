@@ -13,10 +13,11 @@ out by parent-clade assignments.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Iterable
+import warnings
 
 try:
     import yaml  # type: ignore
@@ -41,6 +42,8 @@ class Palette:
     by_taxid: dict[int, CladeColor]
     fallback: CladeColor
     source_path: Path | None
+    taxid_aliases: dict[int, int] = field(default_factory=dict)
+    _canonicalizer: object | None = None
 
     # ---------- construction ----------
 
@@ -62,11 +65,18 @@ class Palette:
                 data = yaml.safe_load(fh)
             source = path
 
+        canonicalizer = _get_shared_taxid_canonicalizer()
         by_taxid: dict[int, CladeColor] = {}
+        taxid_aliases: dict[int, int] = {}
         for key, block in (data.get("clades") or {}).items():
-            taxid = int(block["taxid"])
-            by_taxid[taxid] = CladeColor(
-                taxid=taxid,
+            original_taxid = int(block["taxid"])
+            canonical_taxid = (
+                canonicalizer.canonicalize(original_taxid)
+                if canonicalizer is not None
+                else original_taxid
+            )
+            clade = CladeColor(
+                taxid=canonical_taxid,
                 label=str(block.get("label", key)),
                 color=str(block["color"]).lower(),
                 phylopic_uuid=(
@@ -75,6 +85,15 @@ class Palette:
                     else None
                 ),
             )
+            previous = by_taxid.get(canonical_taxid)
+            if previous is not None and previous != clade:
+                raise ValueError(
+                    "Palette contains multiple entries that canonicalize to "
+                    f"taxid {canonical_taxid}: {previous.label!r} and {clade.label!r}"
+                )
+            by_taxid[canonical_taxid] = clade
+            taxid_aliases[original_taxid] = canonical_taxid
+            taxid_aliases.setdefault(canonical_taxid, canonical_taxid)
 
         fb = data.get("fallback", {}) or {}
         fallback = CladeColor(
@@ -83,13 +102,47 @@ class Palette:
             color=str(fb.get("color", "#bfbfbf")).lower(),
             phylopic_uuid=None,
         )
-        return cls(by_taxid=by_taxid, fallback=fallback, source_path=source)
+        return cls(
+            by_taxid=by_taxid,
+            fallback=fallback,
+            source_path=source,
+            taxid_aliases=taxid_aliases,
+            _canonicalizer=canonicalizer,
+        )
 
     # ---------- lookups ----------
 
+    def canonicalize_taxid(self, taxid: int | str | None) -> int | None:
+        """Return the current NCBI taxid when a merged/obsolete id is given."""
+        try:
+            tid_int = int(taxid)
+        except (TypeError, ValueError):
+            return None
+
+        if tid_int in self.taxid_aliases:
+            return self.taxid_aliases[tid_int]
+
+        canonicalizer = self._canonicalizer
+        canonical_tid = (
+            canonicalizer.canonicalize(tid_int)
+            if canonicalizer is not None
+            else tid_int
+        )
+        self.taxid_aliases[tid_int] = canonical_tid
+        self.taxid_aliases.setdefault(canonical_tid, canonical_tid)
+        return canonical_tid
+
+    def has_taxid(self, taxid: int | str | None) -> bool:
+        """Return True when ``taxid`` resolves to a palette-covered clade."""
+        canonical_tid = self.canonicalize_taxid(taxid)
+        return canonical_tid in self.by_taxid if canonical_tid is not None else False
+
     def for_taxid(self, taxid: int) -> CladeColor:
         """Exact match on a single taxid. Use `for_lineage` for species lookups."""
-        return self.by_taxid.get(int(taxid), self.fallback)
+        canonical_tid = self.canonicalize_taxid(taxid)
+        if canonical_tid is None:
+            return self.fallback
+        return self.by_taxid.get(canonical_tid, self.fallback)
 
     def for_lineage(self, lineage: Iterable[int]) -> CladeColor:
         """Resolve a species' color by walking its lineage most-specific first.
@@ -99,12 +152,9 @@ class Palette:
         the first ancestor that has one, falling back if nothing matches.
         """
         for tid in lineage:
-            try:
-                tid_int = int(tid)
-            except (TypeError, ValueError):
-                continue
-            if tid_int in self.by_taxid:
-                return self.by_taxid[tid_int]
+            canonical_tid = self.canonicalize_taxid(tid)
+            if canonical_tid is not None and canonical_tid in self.by_taxid:
+                return self.by_taxid[canonical_tid]
         return self.fallback
 
     def for_lineage_string(self, taxid_list_str: str, sep: str = ";") -> CladeColor:
@@ -133,6 +183,67 @@ class Palette:
 def load_palette(path: Path | str | None = None) -> Palette:
     """Top-level helper used by plotting CLIs."""
     return Palette.from_yaml(path)
+
+
+class _NCBITaxidCanonicalizer:
+    """Translate merged/obsolete NCBI taxids to their current ids."""
+
+    def __init__(self, ncbi) -> None:
+        self.ncbi = ncbi
+        self._cache: dict[int, int] = {}
+
+    def canonicalize(self, taxid: int) -> int:
+        tid_int = int(taxid)
+        if tid_int < 1:
+            return tid_int
+        cached = self._cache.get(tid_int)
+        if cached is not None:
+            return cached
+
+        canonical_tid = tid_int
+        translator = getattr(self.ncbi, "_translate_merged", None)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                if callable(translator):
+                    _, merged = translator([tid_int])
+                    canonical_tid = int(merged.get(tid_int, tid_int))
+                else:
+                    lineage = self.ncbi.get_lineage(tid_int) or []
+                    if lineage:
+                        canonical_tid = int(lineage[-1])
+        except Exception:
+            canonical_tid = tid_int
+
+        self._cache[tid_int] = canonical_tid
+        self._cache.setdefault(canonical_tid, canonical_tid)
+        return canonical_tid
+
+
+_SHARED_TAXID_CANONICALIZER: _NCBITaxidCanonicalizer | bool | None = None
+
+
+def _get_shared_taxid_canonicalizer() -> _NCBITaxidCanonicalizer | None:
+    """Best-effort lazy loader for NCBI merged-taxid translation."""
+    global _SHARED_TAXID_CANONICALIZER
+
+    if _SHARED_TAXID_CANONICALIZER is False:
+        return None
+    if _SHARED_TAXID_CANONICALIZER is not None:
+        return _SHARED_TAXID_CANONICALIZER
+
+    try:
+        from ete4 import NCBITaxa  # type: ignore
+    except Exception:
+        _SHARED_TAXID_CANONICALIZER = False
+        return None
+
+    try:
+        _SHARED_TAXID_CANONICALIZER = _NCBITaxidCanonicalizer(NCBITaxa())
+    except Exception:
+        _SHARED_TAXID_CANONICALIZER = False
+        return None
+    return _SHARED_TAXID_CANONICALIZER
 
 
 def add_palette_argument(parser, dest: str = "palette") -> None:

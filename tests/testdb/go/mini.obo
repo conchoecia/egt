@@ -1,0 +1,26 @@
+format-version: 1.2
+data-version: releases/test
+
+[Term]
+id: GO:0000001
+name: process-one
+namespace: biological_process
+
+[Term]
+id: GO:0000002
+name: function-one
+namespace: molecular_function
+
+[Term]
+id: GO:0000004
+name: component-one
+namespace: cellular_component
+
+[Term]
+id: GO:0000999
+name: weird-namespace
+namespace: not_a_real_namespace
+
+[Typedef]
+id: part_of
+name: part of

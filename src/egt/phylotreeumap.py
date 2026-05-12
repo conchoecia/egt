@@ -28,11 +28,14 @@ import argparse
 from  ast import literal_eval as aliteraleval
 import bokeh           # bokeh is used to visualize and save the UMAP
 from ete4 import NCBITaxa,Tree
+import html
+import json
 import networkx as nx
 import numpy as np
 np.set_printoptions(linewidth=np.inf)
 import os
 import pandas as pd
+from pathlib import Path
 import re
 import scipy.sparse
 from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz, csr_matrix
@@ -63,6 +66,12 @@ sys.path.insert(1, source_path)
 from egt import rbh_tools
 
 from egt.legacy.plot_alg_fusions_v2 import taxids_to_taxidstringdict
+from egt.palette import Palette
+from egt.custom_taxonomy import (
+    CUSTOM_TAXID_NAMES as _CUSTOM_TAXID_NAMES,
+    EUMETAZOA_TAXID as _EUMETAZOA_TAXID,
+    apply_custom_animal_topology_to_taxid_lineage,
+)
 
 from itertools import combinations
 
@@ -802,6 +811,11 @@ def rbh_to_gb(sample, rbhdf, outfile):
     # Save the result DataFrame to a tsv file
     result_df.to_csv(outfile, sep="\t", index=False, compression="gzip")
 
+def _apply_custom_animal_topology_to_taxid_lineage(lineage, warn=True):
+    """Return lineage with manuscript animal topology replacing NCBI Eumetazoa."""
+    return apply_custom_animal_topology_to_taxid_lineage(lineage, warn=warn)
+
+
 def NCBI_taxid_to_taxdict(ncbi, taxid) -> dict:
     """
     Takes a single NCBI taxid as input and returns a dictionary with useful information:
@@ -855,6 +869,8 @@ def NCBI_taxid_to_taxdict(ncbi, taxid) -> dict:
         raise ValueError(f"The lineage is empty for the taxid {taxid}. Exiting.")
     if len(names) == 0:
         raise ValueError(f"The names are empty for the taxid {taxid}. Exiting.")
+    lineage = _apply_custom_animal_topology_to_taxid_lineage(lineage)
+    names.update(_CUSTOM_TAXID_NAMES)
     entry["taxname"]          = names[taxid]
     entry["taxid_list"]       = [taxid for taxid in lineage]
     entry["taxid_list_str"]   = ";".join([str(taxid) for taxid in lineage])
@@ -876,12 +892,20 @@ def create_directories_if_not_exist(file_path):
     This takes an iterable of file paths or directories for which we want to safely create the directories.
     """
     print("requested file path: ", file_path)
+    target_path = file_path
+    basename = os.path.basename(file_path)
+    if basename and os.path.splitext(basename)[1]:
+        target_path = os.path.dirname(file_path)
+    if target_path == "":
+        return
     # Split the path into directories
-    directories = file_path.split(os.sep)
+    directories = target_path.split(os.sep)
 
     # Iterate over each directory and create if it doesn't exist
-    path_so_far = ''
+    path_so_far = os.sep if os.path.isabs(target_path) else ''
     for directory in directories:
+        if directory == "":
+            continue
         path_so_far = os.path.join(path_so_far, directory)
         if not os.path.exists(path_so_far):
             os.makedirs(path_so_far)
@@ -1182,6 +1206,1555 @@ def get_text_color(hex_color):
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     return "#000000" if brightness > 128 else "#FFFFFF"  # Dark colors get white text, bright colors get black text
 
+
+def _tax_tree_postorder_ids(tax_tree):
+    """Return tax-tree node ids in postorder."""
+    if tax_tree.root is None:
+        tax_tree.root = tax_tree.find_root()
+    if tax_tree.root is None:
+        return []
+
+    order = []
+    stack = [(tax_tree.root, False)]
+    while stack:
+        node_id, seen = stack.pop()
+        if seen:
+            order.append(node_id)
+            continue
+        stack.append((node_id, True))
+        for child_id in tax_tree.nodes[node_id].children:
+            stack.append((child_id, False))
+    return order
+
+
+def _collect_tax_tree_subtree_ids(tax_tree, root_id):
+    """Return all descendants of ``root_id`` including itself."""
+    descendants = set()
+    stack = [root_id]
+    while stack:
+        current = stack.pop()
+        if current in descendants or current not in tax_tree.nodes:
+            continue
+        descendants.add(current)
+        stack.extend(tax_tree.nodes[current].children)
+    return descendants
+
+
+def _compute_tax_tree_plot_positions(tax_tree):
+    """Populate ``node.x`` for the linked-tree Bokeh plot."""
+    tax_tree.sort_nodes("ascending")
+    ordered_leaf_ids = list(getattr(tax_tree, "leaf_order", []))
+    for i, node_id in enumerate(ordered_leaf_ids):
+        tax_tree.nodes[node_id].x = float(i)
+
+    for node_id in _tax_tree_postorder_ids(tax_tree):
+        node = tax_tree.nodes[node_id]
+        if len(node.children) == 0:
+            continue
+        child_xs = [
+            tax_tree.nodes[child_id].x
+            for child_id in node.children
+            if getattr(tax_tree.nodes[child_id], "x", None) is not None
+        ]
+        if not child_xs:
+            continue
+        if len(child_xs) == 1:
+            node.x = float(child_xs[0])
+        else:
+            node.x = (min(child_xs) + max(child_xs)) / 2.0
+    return ordered_leaf_ids
+
+
+def _build_linked_tree_color_maps(tax_tree, palette, placements, palette_order):
+    """Return vertical and horizontal segment colors for nested-tree coloring."""
+    vertical_colors = {
+        (parent_id, child_id): "#b5b5b5"
+        for (parent_id, child_id) in tax_tree.edges
+    }
+    horizontal_colors = {
+        node_id: "#b5b5b5"
+        for node_id, node in tax_tree.nodes.items()
+        if len(node.children) > 1
+    }
+
+    for tid in palette_order:
+        color = palette.by_taxid[tid].color
+        for component_root in placements[tid].component_roots:
+            descendants = _collect_tax_tree_subtree_ids(tax_tree, component_root)
+            for node_id in descendants:
+                node = tax_tree.nodes[node_id]
+                if len(node.children) > 1:
+                    horizontal_colors[node_id] = color
+                if node_id == component_root:
+                    continue
+                parent_id = node.parent
+                if parent_id is None or parent_id == -1 or parent_id not in descendants:
+                    continue
+                vertical_colors[(parent_id, node_id)] = color
+    return vertical_colors, horizontal_colors
+
+
+def _build_linked_tree_bokeh_bundle(tree_newick_path, palette_path):
+    """Build compact Bokeh-ready linked-tree sources for MGT HTML."""
+    from egt import palette_preview as pp
+
+    source_tree = Tree(str(tree_newick_path), parser=1) if hasattr(Tree, "__call__") else Tree(open(tree_newick_path).read())
+    ncbi = NCBITaxa()
+    palette = Palette.from_yaml(str(palette_path))
+
+    tax_tree = pp._build_taxidtree_from_source_tree(source_tree, ncbi)
+    ordered_leaf_ids = _compute_tax_tree_plot_positions(tax_tree)
+    placements = pp._resolve_palette_clade_placements(tax_tree, palette, ncbi)
+    palette_order = pp._build_palette_breadth_first_order(palette, placements, ncbi)
+    vertical_colors, horizontal_colors = _build_linked_tree_color_maps(
+        tax_tree,
+        palette,
+        placements,
+        palette_order,
+    )
+
+    node_ids = list(tax_tree.nodes.keys())
+    node_index_by_id = {node_id: i for i, node_id in enumerate(node_ids)}
+
+    node_parent_index = []
+    node_horizontal_segment_index = [-1] * len(node_ids)
+    node_vertical_segment_index = [-1] * len(node_ids)
+    node_is_leaf = []
+
+    for node_id in node_ids:
+        node = tax_tree.nodes[node_id]
+        parent_id = node.parent
+        node_parent_index.append(node_index_by_id[parent_id] if parent_id in node_index_by_id else -1)
+        node_is_leaf.append(len(node.children) == 0)
+
+    segment_data = {
+        "x0": [],
+        "y0": [],
+        "x1": [],
+        "y1": [],
+        "color": [],
+        "original_color": [],
+        "alpha": [],
+        "original_alpha": [],
+        "line_width": [],
+        "segment_kind": [],
+    }
+
+    for node_id in _tax_tree_postorder_ids(tax_tree):
+        node = tax_tree.nodes[node_id]
+        if len(node.children) <= 1:
+            continue
+        child_xs = [
+            tax_tree.nodes[child_id].x
+            for child_id in node.children
+            if getattr(tax_tree.nodes[child_id], "x", None) is not None
+        ]
+        if len(child_xs) <= 1:
+            continue
+        color = horizontal_colors.get(node_id, "#b5b5b5")
+        seg_idx = len(segment_data["x0"])
+        segment_data["x0"].append(float(min(child_xs)))
+        segment_data["y0"].append(float(node.nodeage))
+        segment_data["x1"].append(float(max(child_xs)))
+        segment_data["y1"].append(float(node.nodeage))
+        segment_data["color"].append(color)
+        segment_data["original_color"].append(color)
+        segment_data["alpha"].append(0.75)
+        segment_data["original_alpha"].append(0.75)
+        segment_data["line_width"].append(0.8)
+        segment_data["segment_kind"].append("horizontal")
+        node_horizontal_segment_index[node_index_by_id[node_id]] = seg_idx
+
+    for parent_id, child_id in tax_tree.edges:
+        child = tax_tree.nodes[child_id]
+        parent = tax_tree.nodes[parent_id]
+        if getattr(child, "x", None) is None or child.nodeage is None or parent.nodeage is None:
+            continue
+        color = vertical_colors.get((parent_id, child_id), "#b5b5b5")
+        seg_idx = len(segment_data["x0"])
+        segment_data["x0"].append(float(child.x))
+        segment_data["y0"].append(float(child.nodeage))
+        segment_data["x1"].append(float(child.x))
+        segment_data["y1"].append(float(parent.nodeage))
+        segment_data["color"].append(color)
+        segment_data["original_color"].append(color)
+        segment_data["alpha"].append(0.75)
+        segment_data["original_alpha"].append(0.75)
+        segment_data["line_width"].append(0.8)
+        segment_data["segment_kind"].append("vertical")
+        node_vertical_segment_index[node_index_by_id[child_id]] = seg_idx
+
+    leaf_data = {
+        "taxid": [],
+        "node_index": [],
+        "x": [],
+        "taxname": [],
+    }
+    for leaf_id in ordered_leaf_ids:
+        leaf_node = tax_tree.nodes[leaf_id]
+        leaf_data["taxid"].append(str(leaf_id))
+        leaf_data["node_index"].append(node_index_by_id[leaf_id])
+        leaf_data["x"].append(float(leaf_node.x))
+        leaf_data["taxname"].append(getattr(leaf_node, "name", "") or "")
+
+    max_age = max(
+        float(node.nodeage)
+        for node in tax_tree.nodes.values()
+        if node.nodeage is not None
+    ) if tax_tree.nodes else 0.0
+
+    node_data = {
+        "node_id": [str(node_id) for node_id in node_ids],
+        "parent_index": node_parent_index,
+        "horizontal_segment_index": node_horizontal_segment_index,
+        "vertical_segment_index": node_vertical_segment_index,
+        "is_leaf": node_is_leaf,
+    }
+
+    tree_leaf_count = len(ordered_leaf_ids)
+    tree_xpad = min(max(1.5, tree_leaf_count * 0.003), 12.0)
+
+    return {
+        "tree_source": bokeh.models.ColumnDataSource(segment_data),
+        "tree_node_source": bokeh.models.ColumnDataSource(node_data),
+        "tree_leaf_source": bokeh.models.ColumnDataSource(leaf_data),
+        "x_range": (-0.5 - tree_xpad, max(tree_leaf_count - 0.5 + tree_xpad, 0.5)),
+        "y_range": (0.0, max_age * 1.02 if max_age > 0 else 1.0),
+        "leaf_count": tree_leaf_count,
+        "segment_count": len(segment_data["x0"]),
+    }
+
+
+def _linked_tree_sync_js(dim_color="#d3d3d3", dim_alpha=0.15):
+    """Return the shared CustomJS helper used to sync the linked tree panel."""
+    return (
+        "            var treeDimColor = " + json.dumps(dim_color) + ";\n"
+        "            var treeDimAlpha = " + f"{float(dim_alpha):.3f}" + ";\n"
+        + r"""
+            function syncLinkedTree(selected_indices, show_all_data) {
+                if (!tree_source || !tree_node_source || !tree_leaf_source) {
+                    return;
+                }
+
+                var tree_data = tree_source.data;
+                var node_data = tree_node_source.data;
+                var leaf_data = tree_leaf_source.data;
+
+                var colors = tree_data['color'];
+                var alphas = tree_data['alpha'];
+                var original_colors = tree_data['original_color'];
+                var original_alphas = tree_data['original_alpha'];
+
+                function restoreTree() {
+                    for (var i = 0; i < colors.length; i++) {
+                        colors[i] = original_colors[i];
+                        alphas[i] = original_alphas[i];
+                    }
+                    tree_source.change.emit();
+                }
+
+                if (show_all_data || !selected_indices || selected_indices.length === 0) {
+                    restoreTree();
+                    return;
+                }
+
+                var leaf_map = {};
+                for (var i = 0; i < leaf_data['taxid'].length; i++) {
+                    leaf_map[String(leaf_data['taxid'][i])] = leaf_data['node_index'][i];
+                }
+
+                var selected_leaf_nodes = [];
+                var seen_nodes = new Set();
+                for (var i = 0; i < selected_indices.length; i++) {
+                    var point_idx = selected_indices[i];
+                    var point_taxid = String(data['taxid'][point_idx] || '');
+                    if (!Object.prototype.hasOwnProperty.call(leaf_map, point_taxid)) {
+                        continue;
+                    }
+                    var leaf_node_idx = leaf_map[point_taxid];
+                    if (!seen_nodes.has(leaf_node_idx)) {
+                        seen_nodes.add(leaf_node_idx);
+                        selected_leaf_nodes.push(leaf_node_idx);
+                    }
+                }
+
+                if (selected_leaf_nodes.length === 0) {
+                    restoreTree();
+                    return;
+                }
+
+                var parent_index = node_data['parent_index'];
+                var horizontal_segment_index = node_data['horizontal_segment_index'];
+                var vertical_segment_index = node_data['vertical_segment_index'];
+                var is_leaf = node_data['is_leaf'];
+
+                var counts = new Map();
+                var first_chain = [];
+                for (var i = 0; i < selected_leaf_nodes.length; i++) {
+                    var current = selected_leaf_nodes[i];
+                    var chain = [];
+                    while (current !== null && current !== undefined && current >= 0) {
+                        chain.push(current);
+                        counts.set(current, (counts.get(current) || 0) + 1);
+                        current = parent_index[current];
+                    }
+                    if (i === 0) {
+                        first_chain = chain;
+                    }
+                }
+
+                var mrca = first_chain.length > 0 ? first_chain[first_chain.length - 1] : -1;
+                for (var i = 0; i < first_chain.length; i++) {
+                    var ancestor = first_chain[i];
+                    if ((counts.get(ancestor) || 0) === selected_leaf_nodes.length) {
+                        mrca = ancestor;
+                        break;
+                    }
+                }
+
+                var highlighted_segments = new Set();
+                function addSegment(seg_idx) {
+                    if (seg_idx !== null && seg_idx !== undefined && seg_idx >= 0) {
+                        highlighted_segments.add(seg_idx);
+                    }
+                }
+
+                for (var i = 0; i < selected_leaf_nodes.length; i++) {
+                    var current = selected_leaf_nodes[i];
+                    while (current !== null && current !== undefined && current >= 0) {
+                        var reached_mrca = current === mrca;
+                        addSegment(horizontal_segment_index[current]);
+                        if (!reached_mrca || is_leaf[current]) {
+                            addSegment(vertical_segment_index[current]);
+                        }
+                        if (reached_mrca) {
+                            break;
+                        }
+                        current = parent_index[current];
+                    }
+                }
+
+                for (var i = 0; i < colors.length; i++) {
+                    colors[i] = treeDimColor;
+                    alphas[i] = treeDimAlpha;
+                }
+
+                highlighted_segments.forEach(function(seg_idx) {
+                    colors[seg_idx] = original_colors[seg_idx];
+                    alphas[seg_idx] = original_alphas[seg_idx];
+                });
+                tree_source.change.emit();
+            }
+    """
+    )
+
+def _split_taxonomy_lineage(value):
+    """Split a semicolon-delimited taxonomy lineage into non-empty labels."""
+    if value is None:
+        return []
+    try:
+        if pd.isna(value):
+            return []
+    except (TypeError, ValueError):
+        pass
+    return [part.strip() for part in str(value).split(";") if part and part.strip()]
+
+
+def _split_taxid_lineage(value):
+    """Split a semicolon-delimited taxid lineage into integer taxids."""
+    if value is None:
+        return []
+    try:
+        if pd.isna(value):
+            return []
+    except (TypeError, ValueError):
+        pass
+    taxids = []
+    for part in str(value).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            taxids.append(int(part))
+        except ValueError:
+            return []
+    return taxids
+
+
+def _format_taxid_lineage(taxids):
+    return ";".join(str(taxid) for taxid in taxids)
+
+
+def _format_taxname_lineage(taxids, names_by_taxid):
+    labels = []
+    for taxid in taxids:
+        label = _CUSTOM_TAXID_NAMES.get(taxid) or names_by_taxid.get(taxid)
+        if label is None:
+            label = str(taxid)
+        labels.append(str(label).strip())
+    return ";".join(label for label in labels if label)
+
+
+def _format_printstring_lineage(taxids, names_by_taxid):
+    labels = []
+    for taxid in taxids:
+        label = _CUSTOM_TAXID_NAMES.get(taxid) or names_by_taxid.get(taxid)
+        if label is None:
+            label = str(taxid)
+        labels.append(f" {str(label).strip()} ({taxid})")
+    return ";".join(labels)
+
+
+def _normalize_custom_taxonomy_columns(plot_data):
+    """Normalize stale NCBI animal lineages to the manuscript custom topology."""
+    if "taxid_list_str" not in plot_data.columns:
+        return plot_data
+
+    plot_data = plot_data.copy()
+    warned_eumetazoa = False
+    for idx, row in plot_data.iterrows():
+        original_taxids = _split_taxid_lineage(row.get("taxid_list_str", ""))
+        if not original_taxids:
+            continue
+
+        should_warn = (not warned_eumetazoa) and (_EUMETAZOA_TAXID in original_taxids)
+        custom_taxids = _apply_custom_animal_topology_to_taxid_lineage(original_taxids, warn=should_warn)
+        if should_warn and custom_taxids != original_taxids:
+            warned_eumetazoa = True
+        if custom_taxids == original_taxids:
+            continue
+
+        original_names = _split_taxonomy_lineage(row.get("taxname_list_str", ""))
+        names_by_taxid = {
+            taxid: original_names[pos]
+            for pos, taxid in enumerate(original_taxids)
+            if pos < len(original_names)
+        }
+
+        taxid_str = _format_taxid_lineage(custom_taxids)
+        taxname_str = _format_taxname_lineage(custom_taxids, names_by_taxid)
+        plot_data.at[idx, "taxid_list_str"] = taxid_str
+        if "taxname_list_str" in plot_data.columns:
+            plot_data.at[idx, "taxname_list_str"] = taxname_str
+        if "taxid_list" in plot_data.columns:
+            plot_data.at[idx, "taxid_list"] = str(custom_taxids)
+        if "taxname_list" in plot_data.columns:
+            plot_data.at[idx, "taxname_list"] = str(_split_taxonomy_lineage(taxname_str))
+        if "printstring" in plot_data.columns:
+            plot_data.at[idx, "printstring"] = _format_printstring_lineage(custom_taxids, names_by_taxid)
+
+        level_columns = sorted(
+            [col for col in plot_data.columns if col.startswith("level_")],
+            key=lambda col: int(col.split("_", 1)[1]) if col.split("_", 1)[1].isdigit() else 999,
+        )
+        npl = 4
+        for pos, col in enumerate(level_columns):
+            start = pos * npl
+            plot_data.at[idx, col] = _format_printstring_lineage(custom_taxids[start:start + npl], names_by_taxid)
+
+    return plot_data
+
+
+# ---------------------------------------------------------------------------
+# UI theme (shared between Python HTML templates and CustomJS string literals)
+# Keep in sync with _THEME_JS below.
+# ---------------------------------------------------------------------------
+# Font family names are quoted with single quotes so they don't collide with
+# the enclosing style="..." attribute. CSS accepts either quote style.
+_UI_FONT_SANS = (
+    "'Inter Tight', 'Inter', ui-sans-serif, system-ui, -apple-system, "
+    "'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+)
+_UI_FONT_MONO = (
+    "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, "
+    "'Liberation Mono', monospace"
+)
+_UI_BG = "#f6f3ee"
+_UI_BG_SOFT = "#fbfaf7"
+_UI_BG_RAISED = "#ffffff"
+_UI_BORDER = "#d8d4cc"
+_UI_BORDER_SOFT = "#e7e3d9"
+_UI_FG = "#25231f"
+_UI_FG_MUTED = "#6f6a5f"
+_UI_ACCENT = "#376f6b"
+_UI_ACCENT_SOFT = "#e6efed"
+_UI_ACCENT_FG = "#1f3935"
+_UI_WARN = "#b7791f"
+_UI_RULE = "#c8c2b5"
+_UI_CHIP_HOVER = "#efeadf"
+
+_UI_THEMES = {
+    "paper": {
+        "bg": "#ffffff",
+        "bg_soft": "#fbfaf7",
+        "bg_raised": "#ffffff",
+        "border": "#d8d4cc",
+        "border_soft": "#e7e3d9",
+        "fg": "#25231f",
+        "fg_muted": "#6f6a5f",
+        "accent": "#376f6b",
+        "accent_soft": "#e6efed",
+        "accent_fg": "#1f3935",
+        "warn": "#b7791f",
+        "rule": "#c8c2b5",
+        "chip_hover": "#efeadf",
+        "grid": "#ded8cd",
+        "axis": "#6f6a5f",
+        "dim_point": "#d3d3d3",
+        "dim_alpha_scale": 0.2,
+        "tree_alpha": 0.75,
+        "tree_dim_alpha": 0.15,
+    },
+    "evogeno_dark": {
+        "bg": "#0a0a0a",
+        "bg_soft": "#111114",
+        "bg_raised": "#111114",
+        "border": "#1f2329",
+        "border_soft": "#1f2329",
+        "fg": "#f2f2ea",
+        "fg_muted": "#b8b8ae",
+        "accent": "#7fe0c8",
+        "accent_soft": "rgba(127, 224, 200, 0.12)",
+        "accent_fg": "#060608",
+        "warn": "#A78BFA",
+        "rule": "#1f2329",
+        "chip_hover": "#16161a",
+        "grid": "#1f2329",
+        "axis": "#b8b8ae",
+        "dim_point": "#76766f",
+        "dim_alpha_scale": 0.36,
+        "tree_alpha": 0.92,
+        "tree_dim_alpha": 0.28,
+    },
+}
+_DEFAULT_UI_THEME = "paper"
+
+
+def _set_ui_theme(ui_theme):
+    """Select the HTML/Bokeh UI theme for the current render."""
+    global _UI_BG, _UI_BG_SOFT, _UI_BG_RAISED, _UI_BORDER, _UI_BORDER_SOFT
+    global _UI_FG, _UI_FG_MUTED, _UI_ACCENT, _UI_ACCENT_SOFT, _UI_ACCENT_FG
+    global _UI_WARN, _UI_RULE, _UI_CHIP_HOVER
+
+    key = str(ui_theme or _DEFAULT_UI_THEME).strip().lower().replace("-", "_")
+    aliases = {
+        "light": "paper",
+        "default": "paper",
+        "dark": "evogeno_dark",
+        "evogeno": "evogeno_dark",
+    }
+    key = aliases.get(key, key)
+    if key not in _UI_THEMES:
+        valid = ", ".join(sorted(_UI_THEMES))
+        raise ValueError(f"Invalid ui_theme: {ui_theme}. Expected one of: {valid}.")
+
+    theme = _UI_THEMES[key]
+    _UI_BG = theme["bg"]
+    _UI_BG_SOFT = theme["bg_soft"]
+    _UI_BG_RAISED = theme["bg_raised"]
+    _UI_BORDER = theme["border"]
+    _UI_BORDER_SOFT = theme["border_soft"]
+    _UI_FG = theme["fg"]
+    _UI_FG_MUTED = theme["fg_muted"]
+    _UI_ACCENT = theme["accent"]
+    _UI_ACCENT_SOFT = theme["accent_soft"]
+    _UI_ACCENT_FG = theme["accent_fg"]
+    _UI_WARN = theme["warn"]
+    _UI_RULE = theme["rule"]
+    _UI_CHIP_HOVER = theme["chip_hover"]
+    return key, theme
+
+
+def _apply_bokeh_plot_theme(plot, theme):
+    """Apply the selected UI theme to a Bokeh figure."""
+    plot.background_fill_color = theme["bg"]
+    plot.border_fill_color = theme["bg"]
+    plot.outline_line_color = theme["border"]
+    plot.title.text_color = theme["fg"]
+    plot.title.text_font = "IBM Plex Sans"
+    plot.axis.axis_label_text_color = theme["axis"]
+    plot.axis.major_label_text_color = theme["axis"]
+    plot.axis.major_tick_line_color = theme["rule"]
+    plot.axis.minor_tick_line_color = theme["rule"]
+    plot.axis.axis_line_color = theme["rule"]
+    plot.grid.grid_line_color = theme["grid"]
+    plot.grid.grid_line_alpha = 0.65
+    return plot
+
+
+def _bokeh_widget_theme_css():
+    """CSS applied directly to Bokeh widget shadow DOM roots."""
+    return f"""
+:host {{
+  color: {_UI_FG};
+  --egt-bg: {_UI_BG};
+  --egt-bg-soft: {_UI_BG_SOFT};
+  --egt-bg-raised: {_UI_BG_RAISED};
+  --egt-fg: {_UI_FG};
+  --egt-muted: {_UI_FG_MUTED};
+  --egt-accent: {_UI_ACCENT};
+  --egt-accent-soft: {_UI_ACCENT_SOFT};
+  --egt-accent-fg: {_UI_ACCENT_FG};
+  --egt-warn: {_UI_WARN};
+  --egt-rule: {_UI_RULE};
+  --egt-hover: {_UI_CHIP_HOVER};
+}}
+.bk-input,.bk-select,.bk-input-group input,.choices__inner,.choices__input {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+  box-shadow: none !important;
+}}
+.bk-input:focus,.bk-select:focus,.bk-input-group input:focus,.choices.is-focused .choices__inner {{
+  border-color: var(--egt-accent) !important;
+  box-shadow: 0 0 0 2px var(--egt-accent-soft) !important;
+  outline: none !important;
+}}
+.bk-input::placeholder {{
+  color: var(--egt-muted) !important;
+  opacity: .8 !important;
+}}
+select.bk-input option,select.bk-select option {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+}}
+.bk-input-group label,.bk-input-group .bk-input-group-label,.bk-slider-title,.bk-slider-value {{
+  color: var(--egt-muted) !important;
+}}
+.noUi-target {{
+  background: var(--egt-bg-soft) !important;
+  border-color: var(--egt-rule) !important;
+  box-shadow: none !important;
+}}
+.noUi-connects {{
+  background: var(--egt-bg-soft) !important;
+}}
+.noUi-connect {{
+  background: var(--egt-accent) !important;
+}}
+.noUi-handle {{
+  background: var(--egt-accent) !important;
+  border: 1px solid var(--egt-accent) !important;
+  box-shadow: 0 0 0 3px var(--egt-accent-soft) !important;
+}}
+.noUi-handle:before,.noUi-handle:after {{
+  background: var(--egt-accent-fg) !important;
+  opacity: .45 !important;
+}}
+.noUi-value,.noUi-tooltip,.noUi-pips {{
+  color: var(--egt-muted) !important;
+}}
+.noUi-marker {{
+  background: var(--egt-rule) !important;
+}}
+.bk-btn,.bk-btn-light,.bk-btn-primary,.bk-btn-default {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+  box-shadow: none !important;
+}}
+.bk-btn:hover,.bk-btn-light:hover,.bk-btn-primary:hover,.bk-btn-default:hover {{
+  background: var(--egt-hover) !important;
+  border-color: var(--egt-accent) !important;
+  color: var(--egt-fg) !important;
+}}
+.bk-btn-success {{
+  background: var(--egt-accent) !important;
+  color: var(--egt-accent-fg) !important;
+  border-color: var(--egt-accent) !important;
+}}
+.bk-btn-success:hover {{
+  filter: brightness(1.08);
+}}
+.bk-dropdown .bk-menu,.bk-menu,.choices__list--dropdown {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.choices__item--choice,.choices__item--selectable {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+}}
+.choices__item--choice.is-highlighted,.choices__item--selectable.is-highlighted {{
+  background: var(--egt-hover) !important;
+  color: var(--egt-fg) !important;
+}}
+.choices__placeholder,.choices__item--disabled {{
+  color: var(--egt-muted) !important;
+  opacity: .8 !important;
+}}
+.bk-tab {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-muted) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.bk-tab.bk-active {{
+  background: var(--egt-bg-soft) !important;
+  color: var(--egt-accent) !important;
+  border-top-color: var(--egt-accent) !important;
+}}
+.bk-data-table,.slick-header,.slick-header-columns,.slick-header-column,
+.bk-data-table .slick-header,.bk-data-table .slick-header-columns,.bk-data-table .slick-header-column {{
+  background: var(--egt-bg-raised) !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.slick-viewport,.slick-pane,.slick-row,
+.bk-data-table .slick-viewport,.bk-data-table .slick-pane,.bk-data-table .slick-row {{
+  background: var(--egt-bg-soft) !important;
+  color: var(--egt-fg) !important;
+}}
+.slick-cell,.slick-cell *,
+.bk-data-table .slick-cell,.bk-data-table .slick-cell * {{
+  background: transparent !important;
+  color: var(--egt-fg) !important;
+  border-color: var(--egt-rule) !important;
+}}
+.slick-row.odd,.slick-row.odd .slick-cell,
+.bk-data-table .slick-row.odd,.bk-data-table .slick-row.odd .slick-cell {{
+  background: var(--egt-bg-raised) !important;
+}}
+.slick-row:hover,.slick-row:hover .slick-cell {{
+  background: var(--egt-hover) !important;
+}}
+.slick-row.active,.slick-row.active .slick-cell,
+.bk-data-table .slick-row.active,.bk-data-table .slick-row.active .slick-cell {{
+  background: var(--egt-accent-soft) !important;
+  color: var(--egt-fg) !important;
+}}
+"""
+
+
+def _apply_bokeh_widget_theme(stylesheet, *models):
+    """Attach a shared stylesheet to Bokeh widgets/layout models when supported."""
+    if stylesheet is None:
+        return
+    for model in models:
+        if model is not None and "stylesheets" in model.properties():
+            model.stylesheets = list(model.stylesheets) + [stylesheet]
+
+# Internal scope keys used by Export to label the file and pick the rows.
+# These are derived automatically from selection state; users no longer
+# pick them via a UI toggle (the previous scope switcher buttons were
+# confusing and redundant with the auto-detection in the Export callback).
+_SCOPE_KEYS = (
+    ("all", "All"),
+    ("search_results", "Filtered"),
+    ("lasso_selection", "Lasso"),
+    ("table_selection", "Table"),
+)
+
+
+def _taxonomy_summary_default_html(plot_data, analysis_type):
+    """Return initial HTML for the plot exploration summary panel."""
+    indices = list(range(len(plot_data)))
+
+    def escape(value):
+        return html.escape(str(value), quote=True)
+
+    def label_for_index(idx):
+        if "taxname" in plot_data.columns:
+            value = plot_data.iloc[idx].get("taxname", "")
+            if not pd.isna(value) and str(value).strip():
+                return str(value).strip()
+        if "taxid" in plot_data.columns:
+            value = plot_data.iloc[idx].get("taxid", "")
+            if not pd.isna(value) and str(value).strip():
+                return f"taxid {str(value).strip()}"
+        if "sample" in plot_data.columns:
+            value = plot_data.iloc[idx].get("sample", "")
+            if not pd.isna(value) and str(value).strip():
+                return str(value).strip()
+        return "Unknown"
+
+    lineages = []
+    if "taxname_list_str" in plot_data.columns:
+        for idx in indices:
+            lineages.append(_split_taxonomy_lineage(plot_data.iloc[idx].get("taxname_list_str", "")))
+
+    shared = []
+    non_empty_lineages = [lineage for lineage in lineages if lineage]
+    if non_empty_lineages:
+        min_depth = min(len(lineage) for lineage in non_empty_lineages)
+        for depth in range(min_depth):
+            candidate = non_empty_lineages[0][depth]
+            if all(lineage[depth] == candidate for lineage in non_empty_lineages):
+                shared.append(candidate)
+            else:
+                break
+
+    counts = {}
+    if non_empty_lineages:
+        depth = len(shared)
+        for idx, lineage in zip(indices, lineages):
+            if not lineage:
+                label = label_for_index(idx)
+            elif depth < len(lineage):
+                label = lineage[depth]
+            else:
+                label = lineage[-1]
+            counts[label] = counts.get(label, 0) + 1
+    else:
+        fallback_field = "taxname" if "taxname" in plot_data.columns else ("taxid" if "taxid" in plot_data.columns else None)
+        if fallback_field:
+            for idx in indices:
+                label = label_for_index(idx)
+                counts[label] = counts.get(label, 0) + 1
+
+    top_items = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    total = len(indices)
+    shared_label = shared[-1] if shared else "No single shared ancestor"
+    shared_lineage = " › ".join(shared)
+    composition_label = f"Composition below {shared_label}" if shared else "Composition"
+
+    bar_html = []
+    for label, count in top_items:
+        pct = (count / total * 100.0) if total else 0.0
+        bar_html.append(
+            '<div style="display:grid;grid-template-columns:minmax(0,1fr) 96px 72px;'
+            'align-items:center;column-gap:10px;margin:5px 0;font-size:12px;">'
+            f'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(label)}</span>'
+            f'<span style="font-family:{_UI_FONT_MONO};font-size:11px;color:{_UI_FG_MUTED};'
+            f'text-align:right;white-space:nowrap;">{count}&nbsp;·&nbsp;{pct:.1f}%</span>'
+            f'<span style="height:6px;background:{_UI_BORDER_SOFT};border-radius:3px;overflow:hidden;">'
+            f'<span style="display:block;height:6px;width:{pct:.1f}%;background:{_UI_ACCENT};"></span>'
+            '</span>'
+            "</div>"
+        )
+
+    if not bar_html:
+        bar_html.append(
+            f'<div style="color:{_UI_FG_MUTED};font-size:12px;">'
+            'No taxonomy fields available for this dataset.</div>'
+        )
+
+    lineage_line = (
+        f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
+        'text-transform:uppercase;margin-top:8px;">Shared lineage</dt>'
+        f'<dd style="margin:2px 0 0;font-family:{_UI_FONT_MONO};font-size:11.5px;'
+        'line-height:1.45;overflow-wrap:anywhere;">'
+        f'{escape(shared_lineage)}</dd>'
+        if shared_lineage
+        else ""
+    )
+    return (
+        f'<div style="box-sizing:border-box;width:100%;padding:14px 16px;'
+        f'border:1px solid {_UI_BORDER};background:{_UI_BG_SOFT};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};">'
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">'
+        f'<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">Exploration summary</span>'
+        f'<span style="font-family:{_UI_FONT_MONO};font-size:12px;color:{_UI_FG};">'
+        f'n = <strong>{total}</strong></span>'
+        '</div>'
+        '<dl style="margin:10px 0 0;padding:0;">'
+        f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
+        'text-transform:uppercase;">Scope</dt>'
+        f'<dd style="margin:2px 0 0;font-size:13px;">All points</dd>'
+        f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
+        'text-transform:uppercase;margin-top:8px;">MRCA</dt>'
+        f'<dd style="margin:2px 0 0;font-size:14px;font-weight:600;">{escape(shared_label)}</dd>'
+        f'{lineage_line}'
+        '</dl>'
+        f'<div style="margin-top:12px;font-size:10.5px;font-weight:700;letter-spacing:.08em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">{escape(composition_label)}</div>'
+        f'<div style="margin-top:4px;">{"".join(bar_html)}</div>'
+        "</div>"
+    )
+
+
+def _selection_status_html(scope, shown, total, active_scope_key="all"):
+    """Return the compact active-state banner shown above the plot controls."""
+    pct = (shown / total * 100.0) if total else 0.0
+    return (
+        f'<div class="egt-status" style="box-sizing:border-box;width:100%;padding:10px 14px;'
+        f'border:1px solid {_UI_RULE};background:{_UI_BG_RAISED};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};font-size:13px;display:flex;align-items:center;'
+        'flex-wrap:wrap;row-gap:6px;column-gap:10px;">'
+        '<span style="display:inline-flex;align-items:baseline;gap:8px;">'
+        f'<span style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;'
+        f'color:{_UI_FG_MUTED};font-weight:700;">Active view</span>'
+        f'<span style="font-weight:600;">{html.escape(str(scope), quote=True)}</span>'
+        '</span>'
+        f'<span style="font-family:{_UI_FONT_MONO};font-size:11.5px;color:{_UI_FG_MUTED};">'
+        f'{shown} / {total} genomes · {pct:.1f}%</span>'
+        '</div>'
+    )
+
+
+def _display_plot_title(plot_title):
+    """Return a concise visible title without filename/palette implementation labels."""
+    title = str(plot_title or "UMAP")
+    title = re.sub(r"(?i)\bpaper[ _-]+palette\b", "", title)
+    title = re.sub(r"(?i)\bpaperpalette\b", "", title)
+    title = re.sub(r"\s{2,}", " ", title)
+    title = re.sub(r"\s+([,;:])", r"\1", title)
+    title = title.strip(" -_:")
+    return title or "UMAP"
+
+
+def _plot_header_html(plot_title, analysis_type, total):
+    """Return the top-level page header for the interactive manuscript plot."""
+    title = html.escape(_display_plot_title(plot_title), quote=True)
+    analysis = html.escape(str(analysis_type or ""), quote=True)
+    return (
+        f'<div class="egt-header" style="box-sizing:border-box;width:100%;padding:14px 20px;'
+        f'border-bottom:1px solid {_UI_BORDER};background:{_UI_BG_RAISED};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};display:flex;align-items:center;'
+        'justify-content:space-between;gap:18px;flex-wrap:wrap;">'
+        '<div style="min-width:0;flex:1 1 320px;">'
+        f'<div style="font-size:11px;font-weight:700;letter-spacing:.14em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">{analysis} projection</div>'
+        '<div style="font-size:18px;font-weight:700;line-height:1.25;margin-top:2px;'
+        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{title}</div>'
+        f'<div style="font-family:{_UI_FONT_MONO};font-size:11.5px;color:{_UI_FG_MUTED};'
+        f'margin-top:3px;">{total} genomes</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _panel_section_html(title, subtitle=""):
+    """Return a small section label for the dashboard side panel."""
+    subtitle_html = (
+        f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin-top:2px;">'
+        f'{html.escape(str(subtitle), quote=True)}</div>'
+        if subtitle
+        else ""
+    )
+    return (
+        f'<div style="box-sizing:border-box;width:100%;padding:12px 0 6px;'
+        f'font-family:{_UI_FONT_SANS};color:{_UI_FG};border-bottom:1px solid {_UI_BORDER_SOFT};">'
+        f'<div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;'
+        f'text-transform:uppercase;color:{_UI_FG};">{html.escape(str(title), quote=True)}</div>'
+        f"{subtitle_html}"
+        "</div>"
+    )
+
+
+def _representative_label_for_rows(rows):
+    """Choose a concise label for a color group in the compact legend."""
+    if "color_group_label" in rows.columns:
+        labels = []
+        for value in rows["color_group_label"]:
+            if value is None:
+                continue
+            try:
+                if pd.isna(value):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            label = str(value).strip()
+            if label:
+                labels.append(label)
+        if labels:
+            counts = {}
+            for label in labels:
+                counts[label] = counts.get(label, 0) + 1
+            return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+    label_candidates = []
+    for _, row in rows.iterrows():
+        lineage = _split_taxonomy_lineage(row.get("taxname_list_str", ""))
+        if lineage:
+            label_candidates.append(lineage[-1])
+        elif "taxname" in row and not pd.isna(row.get("taxname", "")) and str(row.get("taxname", "")).strip():
+            label_candidates.append(str(row.get("taxname", "")).strip())
+        elif "taxid" in row and not pd.isna(row.get("taxid", "")) and str(row.get("taxid", "")).strip():
+            label_candidates.append(f"taxid {str(row.get('taxid', '')).strip()}")
+
+    if not label_candidates:
+        return "Unlabeled"
+
+    counts = {}
+    for label in label_candidates:
+        counts[label] = counts.get(label, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _palette_label_maps(palette_path=None):
+    """Return palette label lookups used to name color groups in the HTML UI."""
+    try:
+        palette = Palette.from_yaml(palette_path)
+    except Exception:
+        return None, {}
+
+    color_to_labels = {}
+    for _, clade in palette.items():
+        color = str(clade.color).strip().lower()
+        if not color:
+            continue
+        color_to_labels.setdefault(color, [])
+        if clade.label not in color_to_labels[color]:
+            color_to_labels[color].append(clade.label)
+
+    fallback_color = str(palette.fallback.color).strip().lower()
+    if fallback_color:
+        color_to_labels.setdefault(fallback_color, [])
+        if palette.fallback.label not in color_to_labels[fallback_color]:
+            color_to_labels[fallback_color].append(palette.fallback.label)
+
+    color_to_label = {
+        color: " / ".join(labels)
+        for color, labels in color_to_labels.items()
+    }
+    return palette, color_to_label
+
+
+def _add_color_group_labels(plot_data, palette_path=None):
+    """Add a stable palette/clade label for each plotted color."""
+    palette, color_to_label = _palette_label_maps(palette_path)
+
+    def label_for_row(row):
+        color = str(row.get("color", "")).strip().lower()
+        if palette is not None and "taxid_list_str" in row:
+            try:
+                clade = palette.for_lineage_string(row.get("taxid_list_str", ""))
+            except Exception:
+                clade = None
+            if clade is not None and str(clade.label).strip():
+                return str(clade.label).strip()
+
+        if color in color_to_label:
+            return color_to_label[color]
+
+        lineage = _split_taxonomy_lineage(row.get("taxname_list_str", ""))
+        if lineage:
+            return lineage[-1]
+        if "taxname" in row and not pd.isna(row.get("taxname", "")) and str(row.get("taxname", "")).strip():
+            return str(row.get("taxname", "")).strip()
+        if "taxid" in row and not pd.isna(row.get("taxid", "")) and str(row.get("taxid", "")).strip():
+            return f"taxid {str(row.get('taxid', '')).strip()}"
+        return "Unlabeled"
+
+    plot_data["color_group_label"] = plot_data.apply(label_for_row, axis=1)
+    return plot_data
+
+
+def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
+    """Return an interactive legend summarizing the active color palette.
+
+    Chips carry a ``data-legend-color`` attribute so the global click
+    delegator in _taxonomy_summary_js can re-select that color group on
+    the plot. Copy buttons carry ``data-copy-color`` to emit the samples
+    of that group as a newline-separated list to the clipboard.
+    """
+    if "original_color" not in plot_data.columns:
+        return ""
+
+    total = len(plot_data)
+    rows = []
+    for color, group in plot_data.groupby("original_color", dropna=False):
+        color_text = str(color)
+        rows.append((color_text, len(group), _representative_label_for_rows(group)))
+
+    rows = sorted(rows, key=lambda item: (-item[1], item[2], item[0]))
+    visible_rows = rows[:max_items]
+    omitted = max(0, len(rows) - len(visible_rows))
+
+    items = []
+    for color, count, label in visible_rows:
+        pct = (count / total * 100.0) if total else 0.0
+        safe_color = html.escape(color, quote=True)
+        safe_label = html.escape(label, quote=True)
+        items.append(
+            f'<div class="egt-legend-chip" data-legend-color="{safe_color}" '
+            f'role="button" tabindex="0" title="Click to select this color group"'
+            'style="display:grid;grid-template-columns:16px 1fr auto 22px;'
+            'align-items:center;column-gap:8px;padding:5px 6px;margin:2px -6px;'
+            f'border-radius:4px;cursor:pointer;font-size:12px;">'
+            f'<span style="width:12px;height:12px;border-radius:2px;background:{safe_color};'
+            'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>'
+            f'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{safe_label}</span>'
+            f'<span style="font-family:{_UI_FONT_MONO};font-size:11px;color:{_UI_FG_MUTED};">'
+            f'{count} · {pct:.1f}%</span>'
+            f'<button type="button" data-copy-color="{safe_color}" '
+            'title="Copy sample names in this group" '
+            f'style="all:unset;cursor:copy;width:20px;height:20px;line-height:20px;'
+            f'text-align:center;border-radius:3px;color:{_UI_FG_MUTED};font-size:13px;">⎘</button>'
+            '</div>'
+        )
+
+    omitted_html = (
+        f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin-top:8px;">'
+        f'+ {omitted} more color groups (not shown)</div>'
+        if omitted
+        else ""
+    )
+
+    return (
+        f'<div class="egt-legend" style="box-sizing:border-box;width:100%;padding:12px 14px;'
+        f'border:1px solid {_UI_BORDER};background:{_UI_BG_SOFT};color:{_UI_FG};'
+        f'font-family:{_UI_FONT_SANS};">'
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">'
+        f'<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">Color legend</span>'
+        f'<span style="font-family:{_UI_FONT_MONO};font-size:11px;color:{_UI_FG_MUTED};">'
+        f'{len(visible_rows)} / {len(rows)} groups</span>'
+        '</div>'
+        f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin:4px 0 8px;">'
+        f'{html.escape(str(scope_label), quote=True)} · click a group to select it</div>'
+        f"{''.join(items)}"
+        f"{omitted_html}"
+        "</div>"
+    )
+
+
+def _taxonomy_summary_js():
+    """Return a CustomJS helper that renders the lasso/search composition panel.
+
+    In addition to rerendering summary_div, status_div, and legend_div,
+    this helper installs a one-time delegated click listener on
+    ``document`` that handles interactive widgets embedded in those
+    divs (scope switcher, legend chips, copy buttons, header help
+    toggle, header reset). It reaches into Bokeh CustomJS args via
+    ``window._egtRefs`` which this function rebinds on every call.
+    """
+    theme_js = (
+        "var T = {"
+        f"fontSans: {json.dumps(_UI_FONT_SANS)},"
+        f"fontMono: {json.dumps(_UI_FONT_MONO)},"
+        f"bg: {json.dumps(_UI_BG)},"
+        f"bgSoft: {json.dumps(_UI_BG_SOFT)},"
+        f"bgRaised: {json.dumps(_UI_BG_RAISED)},"
+        f"border: {json.dumps(_UI_BORDER)},"
+        f"borderSoft: {json.dumps(_UI_BORDER_SOFT)},"
+        f"fg: {json.dumps(_UI_FG)},"
+        f"fgMuted: {json.dumps(_UI_FG_MUTED)},"
+        f"accent: {json.dumps(_UI_ACCENT)},"
+        f"accentSoft: {json.dumps(_UI_ACCENT_SOFT)},"
+        f"accentFg: {json.dumps(_UI_ACCENT_FG)},"
+        f"rule: {json.dumps(_UI_RULE)}"
+        "};"
+        f"var SCOPE_ORDER = {json.dumps(_SCOPE_KEYS)};"
+    )
+    body = r"""
+            function escapeHtml(value) {
+                return String(value === null || value === undefined ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function splitLineage(value) {
+                if (value === null || value === undefined) {
+                    return [];
+                }
+                return String(value).split(';').map(function(part) {
+                    return part.trim();
+                }).filter(function(part) {
+                    return part.length > 0;
+                });
+            }
+
+            function fallbackLabel(idx) {
+                if (data.hasOwnProperty('taxname') && String(data['taxname'][idx] || '').trim() !== '') {
+                    return String(data['taxname'][idx]).trim();
+                }
+                if (data.hasOwnProperty('taxid') && String(data['taxid'][idx] || '').trim() !== '') {
+                    return 'taxid ' + String(data['taxid'][idx]).trim();
+                }
+                if (data.hasOwnProperty('sample') && String(data['sample'][idx] || '').trim() !== '') {
+                    return String(data['sample'][idx]).trim();
+                }
+                return 'Unknown';
+            }
+
+            function sortedCountEntries(counts) {
+                return Object.keys(counts).map(function(label) {
+                    return [label, counts[label]];
+                }).sort(function(a, b) {
+                    if (b[1] !== a[1]) {
+                        return b[1] - a[1];
+                    }
+                    return String(a[0]).localeCompare(String(b[0]));
+                });
+            }
+
+            function commonPrefix(lineages) {
+                var usable = lineages.filter(function(lineage) { return lineage.length > 0; });
+                if (usable.length === 0) {
+                    return [];
+                }
+                var minDepth = usable.reduce(function(acc, lineage) {
+                    return Math.min(acc, lineage.length);
+                }, usable[0].length);
+                var shared = [];
+                for (var depth = 0; depth < minDepth; depth++) {
+                    var candidate = usable[0][depth];
+                    var allSame = true;
+                    for (var i = 1; i < usable.length; i++) {
+                        if (usable[i][depth] !== candidate) {
+                            allSame = false;
+                            break;
+                        }
+                    }
+                    if (!allSame) {
+                        break;
+                    }
+                    shared.push(candidate);
+                }
+                return shared;
+            }
+
+            function exportStateKey(scope) {
+                var label = String(scope || '').toLowerCase();
+                if (label.indexOf('lasso') !== -1) {
+                    return 'lasso_selection';
+                }
+                if (label.indexOf('table') !== -1) {
+                    return 'table_selection';
+                }
+                if (label.indexOf('search') !== -1) {
+                    return 'search_results';
+                }
+                if (label.indexOf('shown') !== -1) {
+                    return 'shown_rows';
+                }
+                return 'all';
+            }
+
+            function colorLegendLabel(idx) {
+                if (data.hasOwnProperty('color_group_label') && String(data['color_group_label'][idx] || '').trim() !== '') {
+                    return String(data['color_group_label'][idx]).trim();
+                }
+                return fallbackLabel(idx);
+            }
+
+            function renderColorLegend(indices, scope) {
+                if (typeof legend_div === 'undefined' || !legend_div || !data.hasOwnProperty('original_color')) {
+                    return;
+                }
+
+                var total = indices.length;
+                var groups = {};
+                for (var i = 0; i < indices.length; i++) {
+                    var idx = indices[i];
+                    var color = String(data['original_color'][idx] || '').trim();
+                    if (color === '') {
+                        color = '#bfbfbf';
+                    }
+                    if (!groups[color]) {
+                        groups[color] = {count: 0, labelCounts: {}};
+                    }
+                    groups[color].count += 1;
+                    var label = colorLegendLabel(idx);
+                    groups[color].labelCounts[label] = (groups[color].labelCounts[label] || 0) + 1;
+                }
+
+                var rows = Object.keys(groups).map(function(color) {
+                    var labelEntries = sortedCountEntries(groups[color].labelCounts);
+                    var label = labelEntries.length > 0 ? labelEntries[0][0] : 'Unlabeled';
+                    return [color, groups[color].count, label];
+                }).sort(function(a, b) {
+                    if (b[1] !== a[1]) {
+                        return b[1] - a[1];
+                    }
+                    var labelCompare = String(a[2]).localeCompare(String(b[2]));
+                    if (labelCompare !== 0) {
+                        return labelCompare;
+                    }
+                    return String(a[0]).localeCompare(String(b[0]));
+                });
+
+                var maxItems = 28;
+                var visible = rows.slice(0, maxItems);
+                var omitted = Math.max(0, rows.length - visible.length);
+                var items = '';
+                for (var r = 0; r < visible.length; r++) {
+                    var color = visible[r][0];
+                    var count = visible[r][1];
+                    var label = visible[r][2];
+                    var pct = total > 0 ? (count / total * 100.0) : 0.0;
+                    items +=
+                        '<div class="egt-legend-chip" data-legend-color="' + escapeHtml(color) + '"' +
+                        ' role="button" tabindex="0" title="Click to select this color group"' +
+                        ' style="display:grid;grid-template-columns:16px 1fr auto 22px;align-items:center;' +
+                        'column-gap:8px;padding:5px 6px;margin:2px -6px;border-radius:4px;cursor:pointer;' +
+                        'font-size:12px;">' +
+                        '<span style="width:12px;height:12px;border-radius:2px;background:' + escapeHtml(color) + ';' +
+                        'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>' +
+                        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
+                        '<span style="font-family:' + T.fontMono + ';font-size:11px;color:' + T.fgMuted + ';">' +
+                        count + ' · ' + pct.toFixed(1) + '%</span>' +
+                        '<button type="button" data-copy-color="' + escapeHtml(color) + '"' +
+                        ' title="Copy sample names in this group"' +
+                        ' style="all:unset;cursor:copy;width:20px;height:20px;line-height:20px;' +
+                        'text-align:center;border-radius:3px;color:' + T.fgMuted + ';font-size:13px;">⎘</button>' +
+                        '</div>';
+                }
+                if (items === '') {
+                    items = '<div style="color:' + T.fgMuted + ';font-size:12px;">No color groups available for this view.</div>';
+                }
+                var omittedHtml = omitted > 0
+                    ? '<div style="font-size:11px;color:' + T.fgMuted + ';margin-top:8px;">+ ' + omitted + ' more color groups (not shown)</div>'
+                    : '';
+
+                legend_div.text =
+                    '<div class="egt-legend" style="box-sizing:border-box;width:100%;padding:12px 14px;' +
+                    'border:1px solid ' + T.border + ';background:' + T.bgSoft + ';color:' + T.fg + ';' +
+                    'font-family:' + T.fontSans + ';">' +
+                    '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">' +
+                    '<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;' +
+                    'text-transform:uppercase;color:' + T.fgMuted + ';">Color legend</span>' +
+                    '<span style="font-family:' + T.fontMono + ';font-size:11px;color:' + T.fgMuted + ';">' +
+                    visible.length + ' / ' + rows.length + ' groups</span>' +
+                    '</div>' +
+                    '<div style="font-size:11px;color:' + T.fgMuted + ';margin:4px 0 8px;">' +
+                    escapeHtml(scope || 'Active view') + ' · click a group to select it</div>' +
+                    items +
+                    omittedHtml +
+                    '</div>';
+            }
+
+            function renderSelectionSummary(selected_indices, show_all_data, scope_label) {
+                var all_indices = [];
+                for (var i = 0; i < data['UMAP1'].length; i++) {
+                    all_indices.push(i);
+                }
+                var indices = (show_all_data || !selected_indices || selected_indices.length === 0)
+                    ? all_indices
+                    : selected_indices.slice();
+                var total = indices.length;
+
+                var lineages = [];
+                var hasLineages = data.hasOwnProperty('taxname_list_str');
+                if (hasLineages) {
+                    for (var i = 0; i < indices.length; i++) {
+                        lineages.push(splitLineage(data['taxname_list_str'][indices[i]]));
+                    }
+                }
+
+                var shared = hasLineages ? commonPrefix(lineages) : [];
+                var sharedLabel = shared.length > 0 ? shared[shared.length - 1] : 'No single shared ancestor';
+                var sharedLineage = shared.join('; ');
+                var depth = shared.length;
+                var counts = {};
+
+                if (hasLineages) {
+                    for (var i = 0; i < indices.length; i++) {
+                        var idx = indices[i];
+                        var lineage = lineages[i];
+                        var label = '';
+                        if (lineage.length === 0) {
+                            label = fallbackLabel(idx);
+                        } else if (depth < lineage.length) {
+                            label = lineage[depth];
+                        } else {
+                            label = lineage[lineage.length - 1];
+                        }
+                        counts[label] = (counts[label] || 0) + 1;
+                    }
+                } else {
+                    for (var i = 0; i < indices.length; i++) {
+                        var label = fallbackLabel(indices[i]);
+                        counts[label] = (counts[label] || 0) + 1;
+                    }
+                }
+
+                var entries = sortedCountEntries(counts).slice(0, 8);
+                var topLabel = entries.length > 0 ? entries[0][0] : 'None';
+                var topCount = entries.length > 0 ? entries[0][1] : 0;
+                var compositionLabel = shared.length > 0 ? 'Subclades below ' + sharedLabel : 'Composition';
+                var scope = scope_label || (indices.length === all_indices.length ? 'All points' : 'Selected points');
+                var allCount = all_indices.length;
+                var pctShown = allCount > 0 ? (total / allCount * 100.0) : 0.0;
+
+                var sharedLineageDisplay = shared.join(' › ');
+                var bars = '';
+                if (entries.length === 0) {
+                    bars = '<div style="color:' + T.fgMuted + ';font-size:12px;">No taxonomy fields available for this dataset.</div>';
+                }
+                for (var i = 0; i < entries.length; i++) {
+                    var label = entries[i][0];
+                    var count = entries[i][1];
+                    var pct = total > 0 ? (count / total * 100.0) : 0.0;
+                    bars +=
+                        '<div style="display:grid;grid-template-columns:minmax(0,1fr) 96px 72px;' +
+                        'align-items:center;column-gap:10px;margin:5px 0;font-size:12px;">' +
+                        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
+                        '<span style="font-family:' + T.fontMono + ';font-size:11px;color:' + T.fgMuted + ';' +
+                        'text-align:right;white-space:nowrap;">' + count + '&nbsp;·&nbsp;' + pct.toFixed(1) + '%</span>' +
+                        '<span style="height:6px;background:' + T.borderSoft + ';border-radius:3px;overflow:hidden;">' +
+                        '<span style="display:block;height:6px;width:' + pct.toFixed(1) + '%;background:' + T.accent + ';"></span>' +
+                        '</span></div>';
+                }
+
+                var lineageBlock = '';
+                if (sharedLineageDisplay) {
+                    lineageBlock =
+                        '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
+                        'text-transform:uppercase;margin-top:8px;">Shared lineage</dt>' +
+                        '<dd style="margin:2px 0 0;font-family:' + T.fontMono + ';font-size:11.5px;' +
+                        'line-height:1.45;overflow-wrap:anywhere;">' + escapeHtml(sharedLineageDisplay) + '</dd>';
+                }
+
+                if (typeof summary_div !== 'undefined' && summary_div) {
+                    summary_div.text =
+                        '<div style="box-sizing:border-box;width:100%;padding:14px 16px;' +
+                        'border:1px solid ' + T.border + ';background:' + T.bgSoft + ';color:' + T.fg + ';' +
+                        'font-family:' + T.fontSans + ';">' +
+                        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;">' +
+                        '<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;' +
+                        'text-transform:uppercase;color:' + T.fgMuted + ';">Exploration summary</span>' +
+                        '<span style="font-family:' + T.fontMono + ';font-size:12px;color:' + T.fg + ';">' +
+                        'n = <strong>' + total + '</strong></span>' +
+                        '</div>' +
+                        '<dl style="margin:10px 0 0;padding:0;">' +
+                        '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
+                        'text-transform:uppercase;">Scope</dt>' +
+                        '<dd style="margin:2px 0 0;font-size:13px;">' + escapeHtml(scope) + '</dd>' +
+                        '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
+                        'text-transform:uppercase;margin-top:8px;">MRCA</dt>' +
+                        '<dd style="margin:2px 0 0;font-size:14px;font-weight:600;">' + escapeHtml(sharedLabel) + '</dd>' +
+                        lineageBlock +
+                        '</dl>' +
+                        '<div style="margin-top:12px;font-size:10.5px;font-weight:700;letter-spacing:.08em;' +
+                        'text-transform:uppercase;color:' + T.fgMuted + ';">' + escapeHtml(compositionLabel) + '</div>' +
+                        '<div style="margin-top:4px;">' + bars + '</div>' +
+                        '</div>';
+                }
+
+                var scopeKey = exportStateKey(scope);
+
+                if (typeof status_div !== 'undefined' && status_div) {
+                    status_div.text =
+                        '<div class="egt-status" style="box-sizing:border-box;width:100%;padding:10px 14px;' +
+                        'border:1px solid ' + T.rule + ';background:' + T.bgRaised + ';color:' + T.fg + ';' +
+                        'font-family:' + T.fontSans + ';font-size:13px;display:flex;align-items:center;' +
+                        'flex-wrap:wrap;row-gap:6px;column-gap:10px;">' +
+                        '<span style="display:inline-flex;align-items:baseline;gap:8px;">' +
+                        '<span style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;' +
+                        'color:' + T.fgMuted + ';font-weight:700;">Active view</span>' +
+                        '<span style="font-weight:600;">' + escapeHtml(scope) + '</span>' +
+                        '</span>' +
+                        '<span style="font-family:' + T.fontMono + ';font-size:11.5px;color:' + T.fgMuted + ';">' +
+                        total + ' / ' + allCount + ' genomes · ' + pctShown.toFixed(1) + '%</span>' +
+                        '</div>';
+                }
+
+                if (typeof export_state !== 'undefined' && export_state) {
+                    export_state.data['state'] = [scopeKey];
+                    export_state.data['rows'] = [total];
+                    export_state.change.emit();
+                }
+
+                renderColorLegend(indices, scope);
+            }
+
+    """
+    return theme_js + body
+
+
+def _delegated_click_handler_js():
+    """Return a self-contained click delegator installed at page load.
+
+    Reads Bokeh references from ``window._egtRefs`` (populated by the
+    page-load init script) so it can run before any CustomJS fires.
+    Handles: header Reset/Help, scope switcher, legend chip select,
+    copy-samples, all without depending on CustomJS context.
+    """
+    src = r"""
+        // Bokeh 3.x renders Div content inside a Shadow DOM. Click events
+        // bubble through the boundary but ev.target gets RETARGETED to the
+        // shadow host, so target.closest('[data-...]') returns null.
+        // composedPath() returns the full event path including shadow
+        // descendants, which is what we need to match our delegated buttons.
+        function findInPath(ev, selector) {
+            var path = ev.composedPath ? ev.composedPath() : [];
+            for (var i = 0; i < path.length; i++) {
+                var n = path[i];
+                if (n && n.nodeType === 1 && n.matches && n.matches(selector)) return n;
+            }
+            return null;
+        }
+        // Search for any element in the composed path whose data-* attribute
+        // (e.g. data-egt-help) is present and not an empty string.
+        function findInPathWithAttr(ev, attr) {
+            var path = ev.composedPath ? ev.composedPath() : [];
+            for (var i = 0; i < path.length; i++) {
+                var n = path[i];
+                if (n && n.nodeType === 1 && n.getAttribute) {
+                    var v = n.getAttribute(attr);
+                    if (v !== null && v !== '') return n;
+                }
+            }
+            return null;
+        }
+        function findHelpPanel() {
+            // Search the document AND every shadow root for [data-egt-help="panel"].
+            var found = document.querySelector('[data-egt-help="panel"]');
+            if (found) return found;
+            var hosts = document.querySelectorAll('*');
+            for (var i = 0; i < hosts.length; i++) {
+                var sr = hosts[i].shadowRoot;
+                if (sr) {
+                    var p = sr.querySelector('[data-egt-help="panel"]');
+                    if (p) return p;
+                }
+            }
+            return null;
+        }
+        if (!window._egtDelegatorInstalled) {
+            window._egtDelegatorInstalled = true;
+            document.addEventListener('click', function(ev) {
+                var refs = window._egtRefs || {};
+
+                var helpBtn = findInPath(ev, '[data-action="toggle-help"]');
+                if (helpBtn) {
+                    var panel = findHelpPanel();
+                    if (panel) {
+                        panel.style.display = (panel.style.display === 'none' || panel.style.display === '') ? 'block' : 'none';
+                    }
+                    ev.preventDefault();
+                    return;
+                }
+
+                var copyBtn = findInPath(ev, '[data-copy-color]');
+                if (copyBtn && refs.source) {
+                    ev.stopPropagation();
+                    var wantColor = copyBtn.getAttribute('data-copy-color');
+                    var sd = refs.source.data;
+                    var origs = sd['original_color'] || [];
+                    var samples = sd['sample'] || sd['taxname'] || [];
+                    var names = [];
+                    for (var i = 0; i < origs.length; i++) {
+                        if (String(origs[i]) === wantColor && samples[i] !== undefined) {
+                            names.push(String(samples[i]));
+                        }
+                    }
+                    var text = names.join(String.fromCharCode(10));
+                    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text);
+                    }
+                    copyBtn.textContent = '✓';
+                    setTimeout(function() { copyBtn.textContent = '⎘'; }, 900);
+                    ev.preventDefault();
+                    return;
+                }
+
+                var chip = findInPath(ev, '[data-legend-color]');
+                if (chip && refs.source) {
+                    var wantColor = chip.getAttribute('data-legend-color');
+                    var sd = refs.source.data;
+                    var origs = sd['original_color'];
+                    var picked = [];
+                    for (var i = 0; i < origs.length; i++) {
+                        if (String(origs[i]) === wantColor) picked.push(i);
+                    }
+                    refs.source.selected.indices = picked;
+                    refs.source.change.emit();
+                    ev.preventDefault();
+                    return;
+                }
+            }, false);
+        }
+    """
+    return src
+
+
 def mgt_mlt_plot_HTML(
     UMAPdf,
     outhtml,
@@ -1191,6 +2764,10 @@ def mgt_mlt_plot_HTML(
     plot_height=600,
     plot_sizing_mode=None,
     match_aspect=True,
+    tree_newick=None,
+    tree_palette=None,
+    tree_height=150,
+    ui_theme=_DEFAULT_UI_THEME,
 ):
     """
     This function takes the UMAPdf and generates an interactive Bokeh plot
@@ -1210,9 +2787,26 @@ def mgt_mlt_plot_HTML(
     match_aspect : bool, optional
         When ``True`` the x and y ranges maintain the same scale so that the data is never
         stretched during interactive resizing or zooming.
+    tree_newick : str, optional
+        Collapsed calibrated Newick tree to render above the UMAP. Only supported for
+        ``analysis_type="MGT"``.
+    tree_palette : str, optional
+        Palette YAML used for nested tree coloring. Defaults to the bundled
+        ``paper_palette.yaml`` when ``tree_newick`` is provided.
+    tree_height : int, optional
+        Height in pixels of the linked tree panel when enabled.
     """
     if analysis_type not in ["MGT", "MLT"]:
         raise ValueError(f"Invalid analysis_type: {analysis_type}. Must be 'MGT' or 'MLT'.")
+    ui_theme_key, selected_theme = _set_ui_theme(ui_theme)
+    display_plot_title = _display_plot_title(plot_title)
+    dim_point_js = json.dumps(selected_theme.get("dim_point", "#d3d3d3"))
+    dim_alpha_scale_js = f"{float(selected_theme.get('dim_alpha_scale', 0.2)):.3f}"
+    widget_stylesheet = (
+        bokeh.models.InlineStyleSheet(css=_bokeh_widget_theme_css())
+        if ui_theme_key == "evogeno_dark"
+        else None
+    )
 
     valid_sizing_modes = {
         None,
@@ -1236,11 +2830,24 @@ def mgt_mlt_plot_HTML(
             f"{', '.join(sorted(filter(None, valid_sizing_modes)))} or None."
         )
 
-    for value, name in ((plot_width, "plot_width"), (plot_height, "plot_height")):
+    for value, name in ((plot_width, "plot_width"), (plot_height, "plot_height"), (tree_height, "tree_height")):
         if not isinstance(value, (int, np.integer)):
             raise TypeError(f"{name} must be provided as a positive integer.")
         if value <= 0:
             raise ValueError(f"{name} must be greater than zero.")
+
+    if tree_newick is not None and analysis_type != "MGT":
+        raise ValueError("Linked tree rendering is currently supported only for analysis_type='MGT'.")
+
+    if tree_newick is not None:
+        tree_newick = str(tree_newick)
+        if not os.path.exists(tree_newick):
+            raise IOError(f"The tree file {tree_newick} does not exist. Exiting.")
+        if tree_palette is None:
+            tree_palette = os.path.join(thisfile_path, "data", "paper_palette.yaml")
+        tree_palette = str(tree_palette)
+        if not os.path.exists(tree_palette):
+            raise IOError(f"The palette file {tree_palette} does not exist. Exiting.")
 
     if not outhtml.endswith(".html"):
         raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
@@ -1330,11 +2937,22 @@ def mgt_mlt_plot_HTML(
 
     if analysis_type == "MGT":
         plot_data = _prune_mgt_columns(plot_data)
+        plot_data = _normalize_custom_taxonomy_columns(plot_data)
+        legend_palette = tree_palette
+        if legend_palette is None:
+            legend_palette = os.path.join(thisfile_path, "data", "paper_palette.yaml")
+        plot_data = _add_color_group_labels(plot_data, legend_palette)
+    elif "color" in plot_data.columns:
+        plot_data = _add_color_group_labels(plot_data, None)
 
     if "taxname_list_str" in plot_data.columns:
         plot_data["taxstring_tooltip"] = plot_data["taxname_list_str"].apply(_format_taxonomy_tooltip)
     else:
         plot_data["taxstring_tooltip"] = ""
+
+    # Stable row identity lets table selections map back to points without relying on
+    # approximate UMAP coordinate matching.
+    plot_data["_row_id"] = np.arange(len(plot_data), dtype=int)
 
     # Ensure a 'size' column for dynamic updates
     plot_data["size"] = 4  # Default dot size
@@ -1350,6 +2968,43 @@ def mgt_mlt_plot_HTML(
 
     # Add a 'text_color' column based on original_color
     plot_data["text_color"] = plot_data["original_color"].apply(get_text_color)
+
+    plot_area_width = max(720, int(plot_width * 0.86))
+    side_panel_width = max(460, min(560, int(plot_width * 0.48)))
+    side_input_width = max(128, int((side_panel_width - 32) / 3))
+    side_button_width = 92
+    page_width = plot_area_width + side_panel_width + 24
+    header_div = bokeh.models.Div(
+        text=_plot_header_html(display_plot_title, analysis_type, len(plot_data)),
+        width=page_width,
+        sizing_mode="stretch_width",
+    )
+    summary_div = bokeh.models.Div(
+        text=_taxonomy_summary_default_html(plot_data, analysis_type),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    status_div = bokeh.models.Div(
+        text=_selection_status_html("All points", len(plot_data), len(plot_data)),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    search_section_div = bokeh.models.Div(
+        text=_panel_section_html("Search / Highlight", "Filter the table and dim non-matching points."),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    table_section_div = bokeh.models.Div(
+        text=_panel_section_html("Selected Rows", "Rows mirror the active view; row clicks focus points."),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    legend_div = bokeh.models.Div(
+        text=_color_legend_html(plot_data),
+        width=side_panel_width,
+        sizing_mode="stretch_width",
+    )
+    export_state = bokeh.models.ColumnDataSource(data=dict(state=["all"], rows=[len(plot_data)]))
 
     # Determine available taxonomic rank columns for searching
     level_columns = [col for col in plot_data.columns if col.startswith("level_")]
@@ -1385,20 +3040,99 @@ def mgt_mlt_plot_HTML(
 
     # Initialize Bokeh figure
     figure_kwargs = dict(
-        title=plot_title,
+        title=display_plot_title,
         tools="pan,wheel_zoom,box_zoom,lasso_select,reset,save",
-        width=int(plot_width),
+        width=plot_area_width,
         height=int(plot_height),
-        output_backend="svg",
+        # Canvas is materially faster than SVG for interactive lasso/selection
+        # on thousands of UMAP points. Keep the linked tree SVG-backed below.
+        output_backend="canvas",
     )
     if plot_sizing_mode and plot_sizing_mode != "fixed":
         figure_kwargs["sizing_mode"] = plot_sizing_mode
 
     plot = bokeh.plotting.figure(**figure_kwargs)
-    plot.output_backend = "svg"
+    plot.output_backend = "canvas"
     plot.match_aspect = bool(match_aspect)
     if plot.match_aspect:
         plot.aspect_scale = 1
+    plot.min_border_left = 16
+    plot.min_border_right = 16
+    _apply_bokeh_plot_theme(plot, selected_theme)
+
+    linked_tree_plot = None
+    linked_tree_source = None
+    linked_tree_node_source = None
+    linked_tree_leaf_source = None
+    if analysis_type == "MGT" and tree_newick is not None:
+        tree_bundle = _build_linked_tree_bokeh_bundle(tree_newick, tree_palette)
+        linked_tree_source = tree_bundle["tree_source"]
+        linked_tree_node_source = tree_bundle["tree_node_source"]
+        linked_tree_leaf_source = tree_bundle["tree_leaf_source"]
+        tree_alpha = float(selected_theme.get("tree_alpha", 0.75))
+        linked_tree_source.data["alpha"] = [tree_alpha] * len(linked_tree_source.data.get("alpha", []))
+        linked_tree_source.data["original_alpha"] = [tree_alpha] * len(linked_tree_source.data.get("original_alpha", []))
+        linked_tree_source.data["line_width"] = [
+            max(float(width), 1.0) for width in linked_tree_source.data.get("line_width", [])
+        ]
+
+        tree_figure_kwargs = dict(
+            title="",
+            tools="pan,xwheel_zoom,box_zoom,reset,save",
+            width=plot_area_width,
+            height=int(tree_height),
+            output_backend="svg",
+            x_range=tree_bundle["x_range"],
+            y_range=tree_bundle["y_range"],
+        )
+        if plot_sizing_mode and plot_sizing_mode != "fixed":
+            tree_figure_kwargs["sizing_mode"] = plot_sizing_mode
+
+        linked_tree_plot = bokeh.plotting.figure(**tree_figure_kwargs)
+        linked_tree_plot.output_backend = "svg"
+        _apply_bokeh_plot_theme(linked_tree_plot, selected_theme)
+        linked_tree_plot.segment(
+            x0="x0",
+            y0="y0",
+            x1="x1",
+            y1="y1",
+            source=linked_tree_source,
+            line_color="color",
+            line_alpha="alpha",
+            line_width="line_width",
+            line_cap="butt",
+        )
+        linked_tree_plot.xaxis.visible = False
+        linked_tree_plot.yaxis.axis_label = "MYA"
+        linked_tree_plot.yaxis.axis_label_text_font_size = "9pt"
+        linked_tree_plot.yaxis.major_label_text_font_size = "8pt"
+        linked_tree_plot.grid.visible = False
+        linked_tree_plot.outline_line_color = None
+        linked_tree_plot.min_border_left = 24
+        linked_tree_plot.min_border_right = 16
+        linked_tree_plot.min_border_top = 4
+        linked_tree_plot.min_border_bottom = 12
+
+        # Add a near-invisible leaf-hover layer so hovering near a tip reveals
+        # its taxname without stealing vertical pixels from the 145 px tree.
+        # Keep the glyph small so the cursor hits at most one tip at a time
+        # (otherwise the tooltip lists every nearby species).
+        leaf_glyph = linked_tree_plot.scatter(
+            x="x",
+            y=0,
+            source=linked_tree_leaf_source,
+            size=4,
+            color="#000000",
+            alpha=0.0,
+            line_color=None,
+        )
+        leaf_hover = bokeh.models.HoverTool(
+            tooltips=[("Taxon", "@taxname"), ("Taxid", "@taxid")],
+            renderers=[leaf_glyph],
+            mode="mouse",
+            point_policy="snap_to_data",
+        )
+        linked_tree_plot.add_tools(leaf_hover)
 
     # Add scatter plot
     scatter = plot.scatter(
@@ -1428,16 +3162,17 @@ def mgt_mlt_plot_HTML(
         step=0.05,
         value=default_alpha,
     )
-    grid_toggle = bokeh.models.Button(label="Grid: On", button_type="default")
+    grid_toggle = bokeh.models.Button(label="Grid: On", button_type="default", width=82)
+    grid_models = list(plot.xgrid) + list(plot.ygrid)
     grid_callback = bokeh.models.CustomJS(
-        args=dict(plot=plot, button=grid_toggle),
+        args=dict(grids=grid_models, button=grid_toggle),
         code="""
-            // Toggle grid visibility
-            var new_state = !plot.xgrid[0].visible;
-            
-            plot.xgrid[0].visible = new_state;
-            plot.ygrid[0].visible = new_state;
-            
+            if (grids.length === 0) { return; }
+            var new_state = !grids[0].visible;
+            for (var i = 0; i < grids.length; i++) {
+                grids[i].visible = new_state;
+                grids[i].change.emit();
+            }
             button.label = new_state ? "Grid: On" : "Grid: Off";
         """,
     )
@@ -1457,30 +3192,33 @@ def mgt_mlt_plot_HTML(
         plot.add_tools(hover)
 
         # Text input fields for search (placed BELOW the plot)
-        search_rbh   = bokeh.models.TextInput(title="Search RBH Ortholog:")
-        search_group = bokeh.models.TextInput(title="Search Gene Group:")
+        search_rbh   = bokeh.models.TextInput(title="Search RBH Ortholog:", width=side_input_width)
+        search_group = bokeh.models.TextInput(title="Search Gene Group:", width=side_input_width)
         search_taxid = bokeh.models.TextInput(
             title="Highlight taxid(s):",
-            placeholder="e.g. 9606 or 9606, 7227"
+            placeholder="e.g. 9606 or 9606, 7227",
+            width=side_input_width,
         )
         rank_select = bokeh.models.Select(
             title="Taxonomic rank:",
             value=default_rank_value,
             options=rank_select_options,
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
         rank_text = bokeh.models.TextInput(
             title="Highlight text in selected rank:",
             placeholder="substring match",
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
 
         # Button to toggle between OR (||) and AND (&&) search logic
-        search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary")
+        search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary", width=150)
         search_mode   = bokeh.models.Toggle(label="Search Mode")  # False = OR (||), True = AND (&&)
 
         # Button to update the plot based on search terms
-        update_button = bokeh.models.Button(label="Update Plot", button_type="success")
+        update_button = bokeh.models.Button(label="Update Plot", button_type="success", width=side_button_width)
 
         # Dynamically determine the max width needed for RBH column
         max_rbh_length   = max(plot_data["rbh"].astype(str).apply(len))  # Get max string length
@@ -1514,62 +3252,55 @@ def mgt_mlt_plot_HTML(
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=columns,
-            width=int(plot_width), height=300,
+            width=side_panel_width, height=360,
             editable=False,  # Disable editing to avoid conflicts
             selectable=True,  # Enable row selection by clicking on the row
             sizing_mode="stretch_width"
         )
 
         # Button to export the current table dataset
-        export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+        export_button = bokeh.models.Button(label="Export Data", button_type="success", width=side_button_width)
+        clear_button = bokeh.models.Button(label="Clear", button_type="warning", width=72)
         
         # Add a callback to highlight table-selected rows in red on the plot
         table_selection_callback = bokeh.models.CustomJS(args=dict(
             source=source,
             filtered_source=filtered_source,
-        ), code="""
-            console.log('Table selection callback triggered');
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
+        ), code=r"""
+""" + _taxonomy_summary_js() + r"""
             var selected_table_rows = filtered_source.selected.indices;
-            console.log('Selected table rows:', selected_table_rows);
             
             // Get the data from both sources
             var source_data = source.data;
             var filtered_data = filtered_source.data;
+            var data = source_data;
             var colors = source_data['color'];
             var sizes = source_data['size'];
             var original_colors = source_data['original_color'];
             var original_sizes = source_data['original_size'];
 
-            console.log('Filtered data length:', filtered_data['UMAP1'].length);
-            console.log('Source data length:', source_data['UMAP1'].length);
-
             // Build a set of all indices that are currently in the table (visible)
             var table_indices = new Set();
-            for (var i = 0; i < filtered_data['UMAP1'].length; i++) {
-                var umap1_val = filtered_data['UMAP1'][i];
-                var umap2_val = filtered_data['UMAP2'][i];
-
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 &&
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        table_indices.add(j);
-                        break;
-                    }
+            for (var i = 0; i < filtered_data['_row_id'].length; i++) {
+                var row_id = Number(filtered_data['_row_id'][i]);
+                if (!Number.isNaN(row_id)) {
+                    table_indices.add(row_id);
                 }
             }
 
-            console.log('Table indices:', Array.from(table_indices));
-
             // If nothing selected in table, restore original colors and sizes for table points only
             if (selected_table_rows.length === 0) {
-                console.log('No rows selected, restoring original colors and sizes for table points only');
                 for (var k = 0; k < colors.length; k++) {
                     if (table_indices.has(k)) {
                         colors[k] = original_colors[k];
                         sizes[k] = original_sizes[k];  // Restore to original size
                     }
                 }
+                renderSelectionSummary(Array.from(table_indices), table_indices.size === colors.length, table_indices.size === colors.length ? 'All points' : 'Shown rows');
                 source.change.emit();
                 return;
             }
@@ -1580,25 +3311,11 @@ def mgt_mlt_plot_HTML(
             // For each selected row in the table, find its corresponding index in source
             for (var i = 0; i < selected_table_rows.length; i++) {
                 var table_row_idx = selected_table_rows[i];
-                
-                // Get unique identifiers from the filtered row
-                var umap1_val = filtered_data['UMAP1'][table_row_idx];
-                var umap2_val = filtered_data['UMAP2'][table_row_idx];
-                
-                console.log('Looking for point at table row', table_row_idx, ':', umap1_val, umap2_val);
-                
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        console.log('Found match at source index:', j);
-                        red_indices.add(j);
-                        break;
-                    }
+                var row_id = Number(filtered_data['_row_id'][table_row_idx]);
+                if (!Number.isNaN(row_id)) {
+                    red_indices.add(row_id);
                 }
             }
-            
-            console.log('Red indices:', Array.from(red_indices));
             
             // Update colors and sizes - set selected rows to red and twice as big
             for (var k = 0; k < colors.length; k++) {
@@ -1613,7 +3330,7 @@ def mgt_mlt_plot_HTML(
                 // If not in table_indices, leave the color/size as-is (stay grey if currently grey)
             }
             
-            console.log('Emitting source change');
+            renderSelectionSummary(Array.from(red_indices), false, 'Table selection');
             source.change.emit();
         """)
         
@@ -1632,7 +3349,11 @@ def mgt_mlt_plot_HTML(
             rank_text=rank_text,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
-        ), code="""
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
+        ), code=r"""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var rbh_input = search_rbh.value.trim().toLowerCase();
@@ -1649,6 +3370,7 @@ def mgt_mlt_plot_HTML(
             var base_alphas = data['base_alpha'];
             var original_colors = data['original_color'];
             var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
+""" + _taxonomy_summary_js() + r"""
 
             var slider_size = Math.max(size_slider.value, 1);
             var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
@@ -1657,7 +3379,7 @@ def mgt_mlt_plot_HTML(
             var highlight_size = slider_size + highlight_size_offset;
             var dim_size = slider_size;
             var highlight_alpha = Math.min(1, slider_alpha + highlight_alpha_offset);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + r""");
 
             var use_and_logic = search_mode.active; // True for AND (&&), False for OR (||)
 
@@ -1703,7 +3425,6 @@ def mgt_mlt_plot_HTML(
                 var match = true;
 
                 // Lasso selection overrides other search methods
-                if (use_lasso) {
                 if (use_lasso) {
                     match = lasso_indices.indexOf(i) !== -1;
                 } else {
@@ -1765,7 +3486,7 @@ def mgt_mlt_plot_HTML(
                         sizes[i] = highlight_size;
                         selected_indices.push(i);
                     } else {
-                        colors[i] = '#d3d3d3';
+                        colors[i] = """ + dim_point_js + r""";
                         alphas[i] = dim_alpha;
                         sizes[i] = dim_size;
                     }
@@ -1789,6 +3510,7 @@ def mgt_mlt_plot_HTML(
             }
 
             // Update sources
+            renderSelectionSummary(selected_indices, show_all_data, show_all_data ? 'All points' : 'Search results');
             source.selected.indices = selected_indices;
             source.change.emit();
             filtered_source.change.emit();
@@ -1805,13 +3527,23 @@ def mgt_mlt_plot_HTML(
             filtered_source=filtered_source,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            search_rbh=search_rbh,
+            search_group=search_group,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            status_div=status_div,
+            export_state=export_state,
         ), code="""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var lasso_indices = source.selected.indices;
+""" + _taxonomy_summary_js() + """
             
             // Only process if there's an actual lasso selection
             if (lasso_indices.length === 0) return;
+            if (search_rbh.value.trim() !== '' || search_group.value.trim() !== '' || search_taxid.value.trim() !== '' || rank_text.value.trim() !== '') return;
             
             var colors = data['color'];
             var sizes = data['size'];
@@ -1823,7 +3555,7 @@ def mgt_mlt_plot_HTML(
             var highlight_size = slider_size + 2;
             var dim_size = slider_size;
             var highlight_alpha = Math.min(1, slider_alpha + 0.1);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + """);
             
             // Clear filtered data
             for (var key in filtered_data) {
@@ -1841,13 +3573,14 @@ def mgt_mlt_plot_HTML(
                         filtered_data[key].push(data[key][i]);
                     }
                 } else {
-                    colors[i] = '#d3d3d3';
+                    colors[i] = """ + dim_point_js + """;
                     alphas[i] = dim_alpha;
                     sizes[i] = dim_size;
                 }
             }
             
             // Update sources (but DON'T modify source.selected.indices)
+            renderSelectionSummary(lasso_indices, false, 'Lasso selection');
             source.change.emit();
             filtered_source.change.emit();
         """)
@@ -1868,13 +3601,25 @@ def mgt_mlt_plot_HTML(
         search_toggle.js_on_event("button_click", update_callback)
 
         # Export Button Callback (Exports highlighted data or full dataset with filename prompt)
-        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
-            var active_data = filtered_source.data['rbh'].length > 0 ? filtered_source.data : source.data;
+        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source, export_state=export_state), code="""
+            var table_has_rows = filtered_source.data['rbh'].length > 0;
+            var active_data = table_has_rows ? filtered_source.data : source.data;
             var keys = Object.keys(active_data);
-            var num_rows = active_data[keys[0]].length;
+            var source_rows = source.data['rbh'].length;
+            var visible_rows = active_data[keys[0]].length;
+            var selected_rows = table_has_rows ? filtered_source.selected.indices.slice() : [];
+            var row_indices = selected_rows.length > 0
+                ? selected_rows
+                : Array.from({length: visible_rows}, function(_, i) { return i; });
 
             // Prompt user for filename
-            var default_filename = (filtered_source.data['rbh'].length > 0) ? "highlighted_data.tsv" : "full_data.tsv";
+            var state = export_state.data['state'][0] || 'all';
+            if (selected_rows.length > 0) {
+                state = 'table_selection';
+            } else if (!table_has_rows || visible_rows === source_rows) {
+                state = 'all';
+            }
+            var default_filename = 'umap_' + state + '_' + row_indices.length + '.tsv';
             var user_filename = prompt("Enter filename for export:", default_filename);
             
             // If user cancels, exit
@@ -1888,16 +3633,17 @@ def mgt_mlt_plot_HTML(
             }
 
             // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "_row_id" && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
 
             // Rename "original_color" to "color"
             var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
 
             var csv_content = renamed_keys.join("\\t") + "\\n"; // Tab-separated column headers
-            for (var i = 0; i < num_rows; i++) {
+            for (var i = 0; i < row_indices.length; i++) {
+                var row_idx = row_indices[i];
                 var row = [];
                 for (var j = 0; j < filtered_keys.length; j++) {
-                    row.push(active_data[filtered_keys[j]][i]);
+                    row.push(active_data[filtered_keys[j]][row_idx]);
                 }
                 csv_content += row.join("\\t") + "\\n";
             }
@@ -1913,6 +3659,60 @@ def mgt_mlt_plot_HTML(
 
         export_button.js_on_event("button_click", export_callback)
 
+        clear_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+            search_rbh=search_rbh,
+            search_group=search_group,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            search_mode=search_mode,
+            search_toggle=search_toggle,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
+        ), code=r"""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+""" + _taxonomy_summary_js() + r"""
+
+            search_rbh.value = "";
+            search_group.value = "";
+            search_taxid.value = "";
+            rank_text.value = "";
+            search_mode.active = false;
+            search_toggle.label = "Search Type: OR (||)";
+            source.selected.indices = [];
+            filtered_source.selected.indices = [];
+
+            var slider_size = Math.max(size_slider.value, 1);
+            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            var colors = data['color'];
+            var sizes = data['size'];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
+            for (var i = 0; i < colors.length; i++) {
+                colors[i] = original_colors[i];
+                sizes[i] = slider_size;
+                alphas[i] = slider_alpha;
+                for (var key in filtered_data) {
+                    filtered_data[key].push(data[key][i]);
+                }
+            }
+
+            renderSelectionSummary([], true, 'All points');
+            source.change.emit();
+            filtered_source.change.emit();
+        """)
+        clear_button.js_on_event("button_click", clear_callback)
+
         # Layout
         layout_kwargs = {}
         row_kwargs = {}
@@ -1921,18 +3721,54 @@ def mgt_mlt_plot_HTML(
             if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
                 row_kwargs["sizing_mode"] = "stretch_width"
 
+        _apply_bokeh_widget_theme(
+            widget_stylesheet,
+            size_slider,
+            alpha_slider,
+            grid_toggle,
+            search_taxid,
+            rank_select,
+            rank_text,
+            search_group,
+            search_rbh,
+            search_toggle,
+            update_button,
+            clear_button,
+            export_button,
+            data_table,
+        )
+
         control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
         search_row = bokeh.layouts.row(
             search_group,
-            search_toggle,
             search_rbh,
+            **row_kwargs,
+        )
+        action_row = bokeh.layouts.row(
+            search_toggle,
             update_button,
+            clear_button,
             export_button,
             align="end",
             **row_kwargs,
         )
-        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, search_row, data_table, **layout_kwargs)
+        left_panel = bokeh.layouts.column(plot, control_row, **layout_kwargs)
+        right_panel = bokeh.layouts.column(
+            status_div,
+            summary_div,
+            search_section_div,
+            taxonomy_row,
+            search_row,
+            action_row,
+            legend_div,
+            table_section_div,
+            data_table,
+            width=side_panel_width,
+            sizing_mode="stretch_width",
+        )
+        body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
+        layout = bokeh.layouts.column(header_div, body_row, sizing_mode="stretch_width")
 
     elif analysis_type == "MGT":
         # Add hover tool with wrapped taxonomy strings for readability
@@ -1948,113 +3784,139 @@ def mgt_mlt_plot_HTML(
         )
         plot.add_tools(hover)
 
+        tree_sync_js = (
+            _linked_tree_sync_js(
+                selected_theme.get("dim_point", "#d3d3d3"),
+                selected_theme.get("tree_dim_alpha", 0.15),
+            )
+            if linked_tree_source is not None
+            else ""
+        )
+        tree_reset_js = "syncLinkedTree([], true);" if linked_tree_source is not None else ""
+        tree_apply_js = "syncLinkedTree(selected_indices, show_all_data);" if linked_tree_source is not None else ""
+        tree_lasso_js = "syncLinkedTree(lasso_snapshot, false);" if linked_tree_source is not None else ""
+        tree_callback_args = {}
+        if linked_tree_source is not None:
+            tree_callback_args.update(
+                tree_source=linked_tree_source,
+                tree_node_source=linked_tree_node_source,
+                tree_leaf_source=linked_tree_leaf_source,
+            )
+
         # Note: filtered_source was already created earlier as an empty ColumnDataSource
 
         search_taxid = bokeh.models.TextInput(
             title="Highlight taxid(s):",
-            placeholder="e.g. 9606 or 9606, 7227"
+            placeholder="e.g. 9606 or 9606, 7227",
+            width=side_input_width,
         )
         rank_select = bokeh.models.Select(
             title="Taxonomic rank:",
             value=default_rank_value,
             options=rank_select_options,
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
         rank_text = bokeh.models.TextInput(
             title="Highlight text in selected rank:",
             placeholder="substring match",
-            disabled=not has_rank_options
+            disabled=not has_rank_options,
+            width=side_input_width,
         )
-        update_button = bokeh.models.Button(label="Update Plot", button_type="success")
-        
-        # Button to export the current table dataset
-        export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+        update_button = bokeh.models.Button(label="Apply search", button_type="success", width=side_button_width)
 
-        # Create table columns for MGT
+        export_button = bokeh.models.Button(label="Export", button_type="success", width=side_button_width)
+        # Single "Clear" that resets everything: selection, search inputs,
+        # zoom/pan, dot size/alpha, grid. The previous design had two
+        # near-identical buttons ("Reset view" and "Clear selection") which
+        # confused users about which did what; one button is friendlier.
+        clear_button = bokeh.models.Button(label="Clear", button_type="warning", width=80)
+        if linked_tree_plot is not None:
+            tree_toggle = bokeh.models.Button(label="Hide tree", button_type="default", width=90)
+        else:
+            tree_toggle = None
+
+        coordinate_formatter = bokeh.models.HTMLTemplateFormatter(template="""
+            <span style="font-family:var(--jp-code-font-family, monospace);">
+                <%= Number(value).toFixed(2) %>
+            </span>
+        """)
+
+        # Create table columns for MGT. Column order is tuned for the dominant
+        # reviewer workflow (identify the sample, then read clade/taxid) and the
+        # color swatch is demoted to a thin row marker instead of its own column.
         mgt_columns = [
-            bokeh.models.TableColumn(field="sample", title="Sample", width=150),
-            bokeh.models.TableColumn(field="taxid", title="Taxid", width=80),
-            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=1),
-            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=1),
             bokeh.models.TableColumn(
-                field="original_color", title="Color",
+                field="sample",
+                title="Sample",
+                width=130,
                 formatter=bokeh.models.HTMLTemplateFormatter(template="""
-                    <span style="background-color:<%= original_color %>;
-                                color:<%= text_color %>;
-                                display:inline-block;
-                                width:auto;
-                                min-width:60px;
-                                text-align:center;
-                                padding:2px 5px;">
-                        <%= original_color %>
-                    </span>
+                    <span style="display:inline-block;padding:0 0 0 8px;
+                                 border-left:4px solid <%= original_color %>;"><%= sample %></span>
                 """),
-                width=75
-            )
+            ),
+            bokeh.models.TableColumn(field="taxid", title="Taxid", width=64),
+            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=56, formatter=coordinate_formatter),
+            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=56, formatter=coordinate_formatter),
         ]
-        
-        # Add taxname column if it exists
+        if "color_group_label" in plot_data.columns:
+            mgt_columns.insert(1, bokeh.models.TableColumn(field="color_group_label", title="Clade", width=140))
         if "taxname" in plot_data.columns:
-            mgt_columns.insert(2, bokeh.models.TableColumn(field="taxname", title="Taxname", width=200))
+            mgt_columns.insert(1, bokeh.models.TableColumn(field="taxname", title="Taxname", width=170))
 
-        # Create DataTable
-        # Enable row selection: click anywhere on row to select, Shift+click for range, Ctrl/Cmd+click for multiple
+        # Create DataTable. Default height is tighter than before so the
+        # table no longer dominates the panel; the "Rows" tab acts as the
+        # expandable drill-down view.
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=mgt_columns,
-            width=int(plot_width), height=300,
-            editable=False,  # Disable editing to avoid conflicts
-            selectable=True,  # Enable row selection by clicking on the row
-            sizing_mode="stretch_width"
+            width=side_panel_width,
+            height=max(420, int(plot_height * 0.72)),
+            editable=False,
+            selectable=True,
+            sizing_mode="fixed",
+            index_position=None,
         )
         
         # Add a callback to highlight table-selected rows in red on the plot
         table_selection_callback = bokeh.models.CustomJS(args=dict(
             source=source,
             filtered_source=filtered_source,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
         ), code="""
-            console.log('Table selection callback triggered (MGT)');
+""" + _taxonomy_summary_js() + """
             var selected_table_rows = filtered_source.selected.indices;
-            console.log('Selected table rows:', selected_table_rows);
             
             // Get the data from both sources
             var source_data = source.data;
             var filtered_data = filtered_source.data;
+            var data = source_data;
             var colors = source_data['color'];
             var sizes = source_data['size'];
             var original_colors = source_data['original_color'];
             var original_sizes = source_data['original_size'];
             
-            console.log('Filtered data length:', filtered_data['UMAP1'].length);
-            console.log('Source data length:', source_data['UMAP1'].length);
-            
             // Build a set of all indices that are currently in the table (visible)
             var table_indices = new Set();
-            for (var i = 0; i < filtered_data['UMAP1'].length; i++) {
-                var umap1_val = filtered_data['UMAP1'][i];
-                var umap2_val = filtered_data['UMAP2'][i];
-                
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        table_indices.add(j);
-                        break;
-                    }
+            for (var i = 0; i < filtered_data['_row_id'].length; i++) {
+                var row_id = Number(filtered_data['_row_id'][i]);
+                if (!Number.isNaN(row_id)) {
+                    table_indices.add(row_id);
                 }
             }
             
-            console.log('Table indices:', Array.from(table_indices));
-            
             // If nothing selected in table, restore original colors and sizes for table points only
             if (selected_table_rows.length === 0) {
-                console.log('No rows selected, restoring original colors and sizes for table points only');
                 for (var k = 0; k < colors.length; k++) {
                     if (table_indices.has(k)) {
                         colors[k] = original_colors[k];
                         sizes[k] = original_sizes[k];  // Restore to original size
                     }
                 }
+                renderSelectionSummary(Array.from(table_indices), table_indices.size === colors.length, table_indices.size === colors.length ? 'All points' : 'Shown rows');
                 source.change.emit();
                 return;
             }
@@ -2065,25 +3927,11 @@ def mgt_mlt_plot_HTML(
             // For each selected row in the table, find its corresponding index in source
             for (var i = 0; i < selected_table_rows.length; i++) {
                 var table_row_idx = selected_table_rows[i];
-                
-                // Get unique identifiers from the filtered row
-                var umap1_val = filtered_data['UMAP1'][table_row_idx];
-                var umap2_val = filtered_data['UMAP2'][table_row_idx];
-                
-                console.log('Looking for point at table row', table_row_idx, ':', umap1_val, umap2_val);
-                
-                // Find this point in the main source
-                for (var j = 0; j < source_data['UMAP1'].length; j++) {
-                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
-                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
-                        console.log('Found match at source index:', j);
-                        red_indices.add(j);
-                        break;
-                    }
+                var row_id = Number(filtered_data['_row_id'][table_row_idx]);
+                if (!Number.isNaN(row_id)) {
+                    red_indices.add(row_id);
                 }
             }
-            
-            console.log('Red indices:', Array.from(red_indices));
             
             // Update colors and sizes - set selected rows to red and twice as big
             for (var k = 0; k < colors.length; k++) {
@@ -2098,14 +3946,14 @@ def mgt_mlt_plot_HTML(
                 // If not in table_indices, leave the color/size as-is (stay grey if currently grey)
             }
             
-            console.log('Emitting source change');
+            renderSelectionSummary(Array.from(red_indices), false, 'Table selection');
             source.change.emit();
         """)
         
         # Trigger when table selection changes
         filtered_source.selected.js_on_change('indices', table_selection_callback)
 
-        update_callback = bokeh.models.CustomJS(args=dict(
+        update_callback_args = dict(
             source=source,
             filtered_source=filtered_source,
             search_taxid=search_taxid,
@@ -2113,7 +3961,13 @@ def mgt_mlt_plot_HTML(
             rank_text=rank_text,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
-        ), code="""
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
+        )
+        update_callback_args.update(tree_callback_args)
+        update_callback_js = r"""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var colors = data['color'];
@@ -2123,6 +3977,8 @@ def mgt_mlt_plot_HTML(
             var base_alphas = data['base_alpha'];
             var original_colors = data['original_color'];
             var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
+/*TREE_SYNC_HELPER*/
+/*SUMMARY_HELPER*/
 
             var taxid_raw = search_taxid.value.trim();
             var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
@@ -2136,7 +3992,7 @@ def mgt_mlt_plot_HTML(
             var highlight_size = slider_size + highlight_size_offset;
             var dim_size = slider_size;
             var highlight_alpha = Math.min(1, slider_alpha + highlight_alpha_offset);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + r""");
 
             var apply_taxid = taxid_terms.length > 0;
             var apply_rank = rank_field !== "" && rank_input !== "";
@@ -2172,6 +4028,8 @@ def mgt_mlt_plot_HTML(
                 
                 source.change.emit();
                 filtered_source.change.emit();
+                renderSelectionSummary([], true, 'All points');
+/*TREE_SYNC_RESET*/
                 return;
             }
             
@@ -2247,7 +4105,7 @@ def mgt_mlt_plot_HTML(
                         sizes[i] = highlight_size;
                         selected_indices.push(i);
                     } else {
-                        colors[i] = '#d3d3d3';
+                        colors[i] = """ + dim_point_js + r""";
                         alphas[i] = dim_alpha;
                         sizes[i] = dim_size;
                     }
@@ -2270,116 +4128,262 @@ def mgt_mlt_plot_HTML(
                 filtered_source.selected.indices = [];
             }
 
+/*TREE_SYNC_APPLY*/
+            renderSelectionSummary(selected_indices, show_all_data, show_all_data ? 'All points' : 'Search results');
             source.selected.indices = selected_indices;
             source.change.emit();
             filtered_source.change.emit();
-        """)
+        """
+        update_callback_js = update_callback_js.replace("/*TREE_SYNC_HELPER*/", tree_sync_js)
+        update_callback_js = update_callback_js.replace("/*SUMMARY_HELPER*/", _taxonomy_summary_js())
+        update_callback_js = update_callback_js.replace("/*TREE_SYNC_RESET*/", tree_reset_js)
+        update_callback_js = update_callback_js.replace("/*TREE_SYNC_APPLY*/", tree_apply_js)
+        update_callback = bokeh.models.CustomJS(args=update_callback_args, code=update_callback_js)
 
         update_button.js_on_event("button_click", update_callback)
         size_slider.js_on_change("value", update_callback)
         alpha_slider.js_on_change("value", update_callback)
-        
+        # Bokeh TextInput.value commits on Enter (or blur). Wiring this
+        # change event makes Enter run the search instead of forcing the
+        # user to also click "Apply search".
+        search_taxid.js_on_change("value", update_callback)
+        rank_text.js_on_change("value", update_callback)
+
         # Separate callback for lasso selection that doesn't modify source.selected.indices
         # This avoids infinite loop while still providing immediate visual feedback
-        lasso_callback = bokeh.models.CustomJS(args=dict(
+        lasso_callback_args = dict(
             source=source,
             filtered_source=filtered_source,
             size_slider=size_slider,
             alpha_slider=alpha_slider,
-        ), code="""
+            summary_div=summary_div,
+            legend_div=legend_div,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            status_div=status_div,
+            export_state=export_state,
+        )
+        lasso_callback_args.update(tree_callback_args)
+        lasso_callback_js = """
             var data = source.data;
             var filtered_data = filtered_source.data;
             var lasso_indices = source.selected.indices;
-            
+""" + _taxonomy_summary_js() + """
+""" + tree_sync_js + """
+
             // Only process if there's an actual lasso selection
             if (lasso_indices.length === 0) return;
-            
-            var colors = data['color'];
-            var sizes = data['size'];
-            var alphas = data['alpha'];
-            var original_colors = data['original_color'];
-            
-            var slider_size = Math.max(size_slider.value, 1);
-            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
-            var highlight_size = slider_size + 2;
-            var dim_size = slider_size;
-            var highlight_alpha = Math.min(1, slider_alpha + 0.1);
-            var dim_alpha = Math.max(0, slider_alpha * 0.2);
-            
-            // Clear filtered data
-            for (var key in filtered_data) {
-                filtered_data[key] = [];
+            if (search_taxid.value.trim() !== '' || rank_text.value.trim() !== '') return;
+
+            // Bokeh fires many selected.indices changes during an active lasso.
+            // Rebuilding the table, summary, legend, and tree on every event
+            // makes dragging feel sticky, so coalesce rapid updates.
+            if (source._egt_lasso_timer) {
+                clearTimeout(source._egt_lasso_timer);
             }
-            
-            // Update visualization based on lasso selection
-            for (var i = 0; i < colors.length; i++) {
-                if (lasso_indices.indexOf(i) !== -1) {
-                    colors[i] = original_colors[i];
-                    alphas[i] = highlight_alpha;
-                    sizes[i] = highlight_size;
-                    // Add to filtered data
-                    for (var key in filtered_data) {
-                        filtered_data[key].push(data[key][i]);
-                    }
-                } else {
-                    colors[i] = '#d3d3d3';
-                    alphas[i] = dim_alpha;
-                    sizes[i] = dim_size;
+            var lasso_snapshot = lasso_indices.slice();
+            source._egt_lasso_timer = setTimeout(function() {
+                var current_indices = source.selected.indices.slice();
+                if (current_indices.length !== lasso_snapshot.length) {
+                    lasso_snapshot = current_indices;
                 }
-            }
-            
-            // Update sources (but DON'T modify source.selected.indices)
-            source.change.emit();
-            filtered_source.change.emit();
-        """)
+                if (lasso_snapshot.length === 0) return;
+                if (search_taxid.value.trim() !== '' || rank_text.value.trim() !== '') return;
+
+                var selected_set = new Set(lasso_snapshot);
+                var colors = data['color'];
+                var sizes = data['size'];
+                var alphas = data['alpha'];
+                var original_colors = data['original_color'];
+
+                var slider_size = Math.max(size_slider.value, 1);
+                var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+                var highlight_size = slider_size + 2;
+                var dim_size = slider_size;
+                var highlight_alpha = Math.min(1, slider_alpha + 0.1);
+                var dim_alpha = Math.max(0, slider_alpha * """ + dim_alpha_scale_js + """);
+
+                // Clear filtered data
+                for (var key in filtered_data) {
+                    filtered_data[key] = [];
+                }
+
+                // Update visualization based on lasso selection
+                for (var i = 0; i < colors.length; i++) {
+                    if (selected_set.has(i)) {
+                        colors[i] = original_colors[i];
+                        alphas[i] = highlight_alpha;
+                        sizes[i] = highlight_size;
+                        // Add to filtered data
+                        for (var key in filtered_data) {
+                            filtered_data[key].push(data[key][i]);
+                        }
+                    } else {
+                        colors[i] = """ + dim_point_js + """;
+                        alphas[i] = dim_alpha;
+                        sizes[i] = dim_size;
+                    }
+                }
+
+                // Update sources (but DON'T modify source.selected.indices)
+""" + tree_lasso_js + """
+                renderSelectionSummary(lasso_snapshot, false, 'Lasso selection');
+                source.change.emit();
+                filtered_source.change.emit();
+            }, 120);
+        """
+        lasso_callback = bokeh.models.CustomJS(args=lasso_callback_args, code=lasso_callback_js)
         
         source.selected.js_on_change("indices", lasso_callback)
 
         # Export Button Callback with filename prompt
-        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
-            var active_data = filtered_source.data['sample'].length > 0 ? filtered_source.data : source.data;
+        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source, export_state=export_state), code=r"""
+            // Export honors the active scope chosen via the scope switcher.
+            // 'all'              -> every sample from source
+            // 'search_results'   -> everything currently in filtered_source
+            // 'lasso_selection'  -> source indices selected on the plot
+            // 'table_selection'  -> filtered_source rows the user picked
+            var scope = (export_state && export_state.data['state'] && export_state.data['state'][0]) || 'all';
+            var source_data = source.data;
+            var filtered_data = filtered_source.data;
+
+            var active_data = source_data;
+            var row_indices = [];
+
+            if (scope === 'table_selection') {
+                active_data = filtered_data;
+                row_indices = filtered_source.selected.indices.slice();
+                if (row_indices.length === 0) {
+                    scope = 'search_results';
+                }
+            }
+            if (scope === 'search_results') {
+                active_data = filtered_data;
+                var n = active_data['sample'] ? active_data['sample'].length : 0;
+                row_indices = Array.from({length: n}, function(_, i) { return i; });
+                if (n === 0) {
+                    scope = 'all';
+                }
+            }
+            if (scope === 'lasso_selection') {
+                active_data = source_data;
+                row_indices = source.selected.indices.slice();
+                if (row_indices.length === 0) {
+                    scope = 'all';
+                }
+            }
+            if (scope === 'all') {
+                active_data = source_data;
+                var n = source_data['sample'] ? source_data['sample'].length : 0;
+                row_indices = Array.from({length: n}, function(_, i) { return i; });
+            }
+
+            var default_filename = 'umap_' + scope + '_' + row_indices.length + '.tsv';
+            var user_filename = prompt(
+                'Export scope: ' + scope + ' (' + row_indices.length + ' rows)\nFilename:',
+                default_filename
+            );
+            if (user_filename === null || user_filename.trim() === '') return;
+            if (!user_filename.endsWith('.tsv')) user_filename += '.tsv';
+
             var keys = Object.keys(active_data);
-            var num_rows = active_data[keys[0]].length;
+            var filtered_keys = keys.filter(function(k) {
+                return !k.includes('Unnamed') && k !== '_row_id' && k !== 'size'
+                    && k !== 'color' && k !== 'alpha' && k !== 'base_size'
+                    && k !== 'base_alpha' && k !== 'taxstring_tooltip'
+                    && k !== 'text_color';
+            });
+            var renamed_keys = filtered_keys.map(function(k) { return k === 'original_color' ? 'color' : k; });
 
-            // Prompt user for filename
-            var default_filename = (filtered_source.data['sample'].length > 0 && filtered_source.data['sample'].length < source.data['sample'].length) ? "highlighted_data.tsv" : "full_data.tsv";
-            var user_filename = prompt("Enter filename for export:", default_filename);
-            
-            // If user cancels, exit
-            if (user_filename === null || user_filename.trim() === "") {
-                return;
-            }
-            
-            // Ensure .tsv extension
-            if (!user_filename.endsWith(".tsv")) {
-                user_filename += ".tsv";
-            }
-
-            // Remove unwanted columns
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
-
-            // Rename "original_color" to "color"
-            var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
-
-            var csv_content = renamed_keys.join("\\t") + "\\n";
-            for (var i = 0; i < num_rows; i++) {
+            var csv_content = renamed_keys.join('\t') + '\n';
+            for (var i = 0; i < row_indices.length; i++) {
+                var row_idx = row_indices[i];
                 var row = [];
                 for (var j = 0; j < filtered_keys.length; j++) {
-                    row.push(active_data[filtered_keys[j]][i]);
+                    row.push(active_data[filtered_keys[j]][row_idx]);
                 }
-                csv_content += row.join("\\t") + "\\n";
+                csv_content += row.join('\t') + '\n';
             }
 
             var blob = new Blob([csv_content], { type: 'text/plain' });
-            var a = document.createElement("a");
+            var a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = user_filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
         """)
-        
+
         export_button.js_on_event("button_click", export_callback)
+
+        clear_callback_args = dict(
+            source=source,
+            filtered_source=filtered_source,
+            search_taxid=search_taxid,
+            rank_text=rank_text,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
+            summary_div=summary_div,
+            legend_div=legend_div,
+            status_div=status_div,
+            export_state=export_state,
+            plot=plot,
+            grid_button=grid_toggle,
+            grids=grid_models,
+        )
+        clear_callback_args.update(tree_callback_args)
+        clear_callback_js = r"""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+""" + tree_sync_js + _taxonomy_summary_js() + r"""
+
+            // Reset search inputs and selections.
+            search_taxid.value = "";
+            rank_text.value = "";
+            source.selected.indices = [];
+            filtered_source.selected.indices = [];
+
+            // Reset sliders to their defaults so the dot appearance returns
+            // to baseline (this is what users expect from "Clear").
+            size_slider.value = 4;
+            alpha_slider.value = 0.8;
+            var slider_size = 4;
+            var slider_alpha = 0.8;
+
+            var colors = data['color'];
+            var sizes = data['size'];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
+            for (var i = 0; i < colors.length; i++) {
+                colors[i] = original_colors[i];
+                sizes[i] = slider_size;
+                alphas[i] = slider_alpha;
+                for (var key in filtered_data) {
+                    filtered_data[key].push(data[key][i]);
+                }
+            }
+
+            // Reset zoom/pan and grid visibility.
+            try { plot.reset.emit(); } catch (e) {}
+            try {
+                for (var gi = 0; gi < grids.length; gi++) {
+                    grids[gi].visible = true;
+                    grids[gi].change.emit();
+                }
+                grid_button.label = "Grid: On";
+            } catch (e) {}
+
+""" + tree_reset_js + r"""
+            renderSelectionSummary([], true, 'All points');
+            source.change.emit();
+            filtered_source.change.emit();
+        """
+        clear_callback = bokeh.models.CustomJS(args=clear_callback_args, code=clear_callback_js)
+        clear_button.js_on_event("button_click", clear_callback)
 
         layout_kwargs = {}
         row_kwargs = {}
@@ -2388,18 +4392,142 @@ def mgt_mlt_plot_HTML(
             if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
                 row_kwargs["sizing_mode"] = "stretch_width"
 
-        control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button, export_button, **row_kwargs)
-        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, data_table, **layout_kwargs)
+        if tree_toggle is not None:
+            tree_toggle_cb = bokeh.models.CustomJS(
+                args=dict(tree=linked_tree_plot, button=tree_toggle),
+                code=r"""
+                    var hidden = tree.visible === false;
+                    tree.visible = hidden;   // toggle
+                    button.label = tree.visible ? "Hide tree" : "Show tree";
+                """,
+            )
+            tree_toggle.js_on_event("button_click", tree_toggle_cb)
+
+        _apply_bokeh_widget_theme(
+            widget_stylesheet,
+            size_slider,
+            alpha_slider,
+            grid_toggle,
+            search_taxid,
+            rank_select,
+            rank_text,
+            update_button,
+            clear_button,
+            export_button,
+            tree_toggle,
+            data_table,
+        )
+
+        control_row = bokeh.layouts.row(size_slider, alpha_slider, **row_kwargs)
+        grid_row = bokeh.layouts.row(grid_toggle, **row_kwargs)
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
+        action_row = bokeh.layouts.row(update_button, clear_button, export_button, align="start", **row_kwargs)
+        tree_action_row = (
+            bokeh.layouts.row(tree_toggle, align="start", **row_kwargs)
+            if tree_toggle is not None
+            else None
+        )
+
+        left_children = [plot, control_row, grid_row]
+        if linked_tree_plot is not None:
+            left_children.insert(0, linked_tree_plot)
+        left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
+
+        # Tabs wrap the three readouts so they share vertical space instead
+        # of stacking and pushing the table below the fold.
+        readout_tabs = bokeh.models.Tabs(
+            tabs=[
+                bokeh.models.TabPanel(child=summary_div, title="Summary"),
+                bokeh.models.TabPanel(child=legend_div, title="Legend"),
+                bokeh.models.TabPanel(child=data_table, title="Rows"),
+            ],
+            width=side_panel_width,
+        )
+        _apply_bokeh_widget_theme(widget_stylesheet, readout_tabs)
+
+        right_children = [
+            status_div,
+            search_section_div,
+            taxonomy_row,
+            action_row,
+            readout_tabs,
+        ]
+        if tree_action_row is not None:
+            right_children.insert(4, tree_action_row)
+
+        right_panel = bokeh.layouts.column(
+            *right_children,
+            width=side_panel_width,
+        )
+        body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
+        layout = bokeh.layouts.column(header_div, body_row, sizing_mode="stretch_width")
 
     # Store the IDs for later reference in auto-init script
     source_id = source.id if filtered_source is not None else None
     filtered_source_id = filtered_source.id if filtered_source is not None else None
+    export_state_id = export_state.id if filtered_source is not None else None
 
     # Output to HTML
-    bokeh.plotting.output_file(outhtml)
+    bokeh.plotting.output_file(outhtml, title=display_plot_title, mode="inline")
     bokeh.io.save(layout)
-    
+
+    # Inject global stylesheet + keyboard shortcut handler. This runs for
+    # every HTML we emit (MGT and MLT), independent of the filtered-source
+    # auto-init below.
+    try:
+        with open(outhtml, 'r', encoding='utf-8') as f:
+            html_shell = f.read()
+        page_widget_css = _bokeh_widget_theme_css() if ui_theme_key == "evogeno_dark" else ""
+        style_block = (
+            "<style id=\"egt-ui-style\">"
+            "body{box-sizing:border-box;margin:0;padding:6px 24px 8px 6px;overflow-x:auto;"
+            "background:" + _UI_BG + ";color:" + _UI_FG + ";}"
+            "*,*:before,*:after{box-sizing:inherit;}"
+            ".egt-legend-chip:hover{background:" + _UI_CHIP_HOVER + ";}"
+            ".egt-legend-chip:focus{outline:2px solid " + _UI_ACCENT + ";outline-offset:1px;}"
+            + page_widget_css +
+            # Deliberately NOT adding responsive overrides on .bk-Row / .bk-Column:
+            # those are Bokeh's internal layout classes and forcing widths there
+            # breaks match_aspect and stretches the plot horizontally.
+            "</style>"
+        )
+        kb_script = (
+            "<script id=\"egt-keyboard\">(function(){"
+            "document.addEventListener('keydown', function(ev){"
+            "var tag=(ev.target && ev.target.tagName)||'';"
+            "if(tag==='INPUT'||tag==='TEXTAREA'){"
+            "if(ev.key==='Escape'){ev.target.blur();}return;"
+            "}"
+            "if(ev.key==='/'){"
+            "var inputs=document.querySelectorAll('input[type=\"text\"]');"
+            "for(var i=0;i<inputs.length;i++){"
+            "var ph=(inputs[i].placeholder||'').toLowerCase();"
+            "if(ph.indexOf('9606')!==-1||ph.indexOf('taxid')!==-1){"
+            "inputs[i].focus();ev.preventDefault();return;}}}"
+            "if(ev.key==='Escape'){"
+            "var refs=window._egtRefs||{};"
+            "if(refs.source){refs.source.selected.indices=[];refs.source.change.emit();}"
+            "if(refs.filtered_source){refs.filtered_source.selected.indices=[];refs.filtered_source.change.emit();}}"
+            "if(ev.key==='e'||ev.key==='E'){"
+            "var btns=document.querySelectorAll('button');"
+            "for(var i=0;i<btns.length;i++){"
+            "if((btns[i].textContent||'').trim()==='Export'){btns[i].click();ev.preventDefault();return;}}}"
+            "});})();</script>"
+        )
+        inject = style_block + kb_script
+        # Bokeh's inline bundle contains a literal '</body>' string inside
+        # DOMPurify; use rpartition so we only inject before the *real*
+        # closing body tag, not inside a JS string literal.
+        before, sep, after = html_shell.rpartition("</body>")
+        if sep:
+            html_shell = before + inject + sep + after
+        else:
+            html_shell += inject
+        with open(outhtml, 'w', encoding='utf-8') as f:
+            f.write(html_shell)
+    except OSError:
+        pass
+
     # Auto-populate the table on page load by injecting JavaScript into the HTML
     # This ensures the table is populated immediately without duplicating data in the HTML
     if filtered_source is not None and source_id and filtered_source_id:
@@ -2411,34 +4539,36 @@ def mgt_mlt_plot_HTML(
     <script type="text/javascript">
     // Auto-populate table on page load (without embedding duplicate data)
     (function() {{
-        console.log('Auto-init script loaded');
         var retryCount = 0;
         var maxRetries = 100; // Max 5 seconds of retries (100 * 50ms)
         
         function initTable() {{
             retryCount++;
-            console.log('initTable attempt', retryCount, '- checking for Bokeh objects');
             
             if (typeof Bokeh !== 'undefined' && Bokeh.index && Bokeh.index["{source_id}"] && Bokeh.index["{filtered_source_id}"]) {{
                 try {{
-                    console.log('Bokeh objects found, initializing table');
                     var source = Bokeh.index["{source_id}"];
                     var filtered_source = Bokeh.index["{filtered_source_id}"];
-                    
-                    console.log('Source data length:', Object.keys(source.data).length);
-                    console.log('Source UMAP1 length:', source.data['UMAP1'].length);
-                    
+                    var export_state = Bokeh.index["{export_state_id}"];
+
                     // Copy all data from source to filtered_source
                     for (var key in source.data) {{
                         filtered_source.data[key] = source.data[key].slice();
                     }}
                     filtered_source.change.emit();
-                    console.log("Table initialized successfully with", filtered_source.data['UMAP1'].length, "rows");
+
+                    // Bind refs for the page-load click delegator (scope
+                    // switcher, legend chips, header Reset/?). Without
+                    // this, clicks on those buttons do nothing until the
+                    // user fires some other CustomJS callback first.
+                    window._egtRefs = window._egtRefs || {{}};
+                    window._egtRefs.source = source;
+                    window._egtRefs.filtered_source = filtered_source;
+                    if (export_state) {{ window._egtRefs.export_state = export_state; }}
                 }} catch (e) {{
                     console.error("Error initializing table:", e);
                 }}
             }} else {{
-                console.log('Bokeh objects not ready yet');
                 if (retryCount < maxRetries) {{
                     // Bokeh objects not ready yet, try again
                     setTimeout(initTable, 50);
@@ -2449,23 +4579,32 @@ def mgt_mlt_plot_HTML(
         }}
         
         // Wait for page to fully load
-        console.log('Document readyState:', document.readyState);
         if (document.readyState === 'loading') {{
-            console.log('Waiting for DOMContentLoaded');
             document.addEventListener('DOMContentLoaded', function() {{
-                console.log('DOMContentLoaded fired, starting init in 200ms');
                 setTimeout(initTable, 200);
             }});
         }} else {{
-            console.log('Document already loaded, starting init in 200ms');
             setTimeout(initTable, 200);
         }}
     }})();
     </script>
-</body>"""
+"""
         
-        html_content = html_content.replace('</body>', init_script)
-        
+        # Install the delegated click handler at page load so the scope
+        # switcher, legend chips, Reset, and ? buttons are responsive
+        # before any CustomJS has fired.
+        delegator_script = (
+            "<script id=\"egt-delegator\">(function(){"
+            + _delegated_click_handler_js()
+            + "})();</script>"
+        )
+
+        before_body, closing_body, after_body = html_content.rpartition('</body>')
+        if closing_body:
+            html_content = before_body + init_script + delegator_script + closing_body + after_body
+        else:
+            html_content += init_script + delegator_script
+
         with open(outhtml, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
@@ -2911,6 +5050,16 @@ def construct_lil_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix =
     stop = time.time()
     print("{}It took {} seconds to add the col_indices column with map".format(print_prefix, stop - start))
 
+    # Fail explicitly when an observed RBH pair is absent from the locus-index
+    # map. Relying on sparse-matrix construction to reject NaN/object indices
+    # is platform-dependent and caused macOS CI to miss this error path.
+    if concatdf["col_indices"].isna().any():
+        missing_pairs = sorted({pair for pair, ix in zip(concatdf["pair"], concatdf["col_indices"]) if pd.isna(ix)})
+        raise ValueError(
+            "One or more RBH pairs are missing from alg_combo_to_ix: "
+            f"{missing_pairs[:5]}"
+        )
+
     sparse_matrix = coo_matrix(( concatdf["distance"],
                                 (concatdf["row_indices"], concatdf["col_indices"])),
                                 shape = (len(sampledf), len(alg_combo_to_ix)))
@@ -2940,7 +5089,7 @@ def rbh_to_samplename(rbhfile, ALGname) -> str:
 
     # split on - and check that the second element is an integer
     if not re.match(r"^[0-9]*$", splits[1]):
-        raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
+        raise ValueError(f"There is a non-numeric character in the taxid string, {splits[1]}, for file {filename}. Exiting.")
     # I haven't makde a unit test. Not working on ssh. Oh well.
     return filename
 
@@ -4500,9 +6649,8 @@ def _cmd_mlt_html(args):
 
 
 def _cmd_plot_html(args):
-    umapdf = pd.read_csv(args.umap_df, sep="\t", index_col=0)
     mgt_mlt_plot_HTML(
-        UMAPdf=umapdf,
+        UMAPdf=args.umap_df,
         outhtml=args.html_out,
         plot_title=args.title,
         analysis_type=args.analysis_type,
@@ -4510,6 +6658,10 @@ def _cmd_plot_html(args):
         plot_height=args.plot_height,
         plot_sizing_mode=args.sizing_mode,
         match_aspect=not args.no_match_aspect,
+        tree_newick=args.tree_newick,
+        tree_palette=args.tree_palette,
+        tree_height=args.tree_height,
+        ui_theme=args.ui_theme,
     )
     return 0
 
@@ -4595,6 +6747,10 @@ def main(argv=None):
     p.add_argument("--plot-height", type=int, default=600, help="Plot height in pixels.")
     p.add_argument("--sizing-mode", default=None, choices=[None, "fixed", "stretch_width", "stretch_height", "stretch_both", "scale_width", "scale_height", "scale_both"], help="Bokeh sizing mode.")
     p.add_argument("--no-match-aspect", action="store_true", help="Disable locked aspect ratio.")
+    p.add_argument("--tree-newick", default=None, help="Optional collapsed calibrated Newick to render above the UMAP (MGT only).")
+    p.add_argument("--tree-palette", default=None, help="Optional palette YAML for linked tree coloring (defaults to bundled paper_palette.yaml).")
+    p.add_argument("--tree-height", type=int, default=150, help="Height in pixels of the linked tree panel when enabled.")
+    p.add_argument("--ui-theme", default=_DEFAULT_UI_THEME, choices=sorted(_UI_THEMES), help="HTML UI color theme.")
     p.set_defaults(func=_cmd_plot_html)
 
     args = parser.parse_args(argv)
