@@ -31,6 +31,10 @@ import os
 import sys
 from glob import glob
 
+from ete4 import NCBITaxa
+
+from egt import rbh_tools
+
 
 DISPERSAL_BINS = {
     '0%-20% dispersal':   (0.8, 1.0),   # Low dispersal = high conservation
@@ -183,7 +187,6 @@ def parse_metadata(metadata_file, species_col="species", lineage_col="taxidstrin
     
     # Convert taxidstrings to human-readable lineages
     print("Converting taxidstrings to human-readable lineages...", file=sys.stderr)
-    from ete4 import NCBITaxa
     ncbi = NCBITaxa()
     species_to_lineage = {}
     
@@ -417,8 +420,6 @@ def plot_dispersal_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, speci
 
 def main(argv=None):
     args = parse_args(argv)
-
-    from egt import rbh_tools
 
     # Parse ALG database
     print(f"Loading ALG database: {args.alg_rbh}", file=sys.stderr)

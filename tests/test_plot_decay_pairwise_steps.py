@@ -146,7 +146,7 @@ def test_decay_pair_helpers_and_caching(tmp_path: Path, monkeypatch):
     assert cached_once == cached_twice
 
 
-def test_calculate_pairwise_decay_and_plot_dispersion(tmp_path: Path, monkeypatch):
+def test_calculate_pairwise_decay_and_plot_dispersal(tmp_path: Path, monkeypatch):
     rbh = _write_rbh(
         tmp_path / "A_B.rbh",
         [
@@ -205,8 +205,8 @@ def test_calculate_pairwise_decay_and_plot_dispersion(tmp_path: Path, monkeypatc
             {"ALGname": ["Qa", "Qb"], "Size": [10, 20], "Color": ["#aa0000", "#00aa00"]}
         ),
     )
-    pdps.plot_dispersion_by_ALG("A", result, str(alg_db), algname="ALG", outdir=str(tmp_path / "plots"))
-    assert (tmp_path / "plots" / "A_ALG_dispersion_by_conservation.pdf").exists()
+    pdps.plot_dispersal_by_ALG("A", result, str(alg_db), algname="ALG", outdir=str(tmp_path / "plots"))
+    assert (tmp_path / "plots" / "A_ALG_dispersal_by_conservation.pdf").exists()
 
 
 def test_main_orchestrates_with_stubbed_helpers(monkeypatch, tmp_path: Path):
@@ -242,7 +242,7 @@ def test_main_orchestrates_with_stubbed_helpers(monkeypatch, tmp_path: Path):
         lambda *_args, **_kwargs: ({"A": {"chr1": 1}, "B": {"chr2": 1}}, {"A": {"chr1": 100}, "B": {"chr2": 100}}),
     )
     monkeypatch.setattr(pdps, "calculate_pairwise_decay_sp1_vs_many", lambda *args, **kwargs: {"A": {"B": "dummy.tsv"}})
-    called = {"pairwise": 0, "dispersion": 0}
+    called = {"pairwise": 0, "dispersal": 0}
     monkeypatch.setattr(
         pdps,
         "plot_pairwise_decay_sp1_vs_all",
@@ -250,12 +250,12 @@ def test_main_orchestrates_with_stubbed_helpers(monkeypatch, tmp_path: Path):
     )
     monkeypatch.setattr(
         pdps,
-        "plot_dispersion_by_ALG",
-        lambda *args, **kwargs: called.__setitem__("dispersion", called["dispersion"] + 1),
+        "plot_dispersal_by_ALG",
+        lambda *args, **kwargs: called.__setitem__("dispersal", called["dispersal"] + 1),
     )
 
     assert pdps.main([]) == 0
-    assert called == {"pairwise": 1, "dispersion": 1}
+    assert called == {"pairwise": 1, "dispersal": 1}
 
 
 def test_chromosome_alg_mapping_and_plotting_helpers(tmp_path: Path, monkeypatch):
