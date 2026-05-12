@@ -1,22 +1,22 @@
 #!/usr/bin/env python
 
 """
-    Filename:   plot_ALG_dispersion.py
+    Filename:   plot_ALG_dispersal.py
    File type:   python script (.py)
       Author:   darrin t schultz (github: @conchoecia)
 Date created:   January 1st, 2026
 
 Description:
-  - This script creates dispersion plots showing ALG conservation categorized by
+  - This script creates dispersal plots showing ALG conservation categorized by
     median ALG conservation levels (0-20%, 40-60%, 80-100%).
   - For each genome, calculates the median conservation across all ALGs to determine
-    which dispersion bin it belongs to.
+    which dispersal bin it belongs to.
   - Each datapoint in the plot is one ALG's conservation percentage in one genome.
   - ALGs are sorted by size (smallest to largest) on the x-axis.
   - Uses box-and-whisker plots colored by ALG.
 
 Usage:
-  python plot_ALG_dispersion.py -d /path/to/species_vs_ALG_rbh_files/ \\
+  python plot_ALG_dispersal.py -d /path/to/species_vs_ALG_rbh_files/ \\
                                  -a /path/to/ALG_database.rbh \\
                                  -n BCnS \\
                                  -o output_directory/
@@ -30,18 +30,31 @@ import pandas as pd
 import os
 import sys
 from glob import glob
+
 from ete4 import NCBITaxa
 
-# Add source directory to path for rbh_tools import
-script_path = os.path.dirname(os.path.abspath(__file__))
-source_path = os.path.join(script_path, "../source")
-sys.path.insert(1, source_path)
 from egt import rbh_tools
+
+
+DISPERSAL_BINS = {
+    '0%-20% dispersal':   (0.8, 1.0),   # Low dispersal = high conservation
+    '40%-60% dispersal':  (0.4, 0.6),   # Medium dispersal = medium conservation
+    '80%-100% dispersal': (0.0, 0.2),   # High dispersal = low conservation
+}
+
+
+def _assign_dispersal_bin(median_conservation: float, bins=DISPERSAL_BINS):
+    """Return bin name for a median-conservation value, or None if it falls in a gap."""
+    for bin_name, (lower, upper) in bins.items():
+        if lower <= median_conservation <= upper:
+            return bin_name
+    return None
+
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Plot ALG conservation dispersion categorized by median conservation levels.",
-        epilog="This script analyzes species vs ALG RBH files to create dispersion plots.")
+        description="Plot ALG conservation dispersal categorized by median conservation levels.",
+        epilog="This script analyzes species vs ALG RBH files to create dispersal plots.")
     
     parser.add_argument("-d", "--directory", required=True,
         help="Directory containing species vs ALG RBH files (e.g., species_vs_BCnS.rbh)")
@@ -49,8 +62,8 @@ def parse_args(argv=None):
         help="Path to ALG database RBH file (e.g., BCnSSimakov2022.rbh)")
     parser.add_argument("-n", "--algname", default="BCnS",
         help="Name of ALG database (default: BCnS)")
-    parser.add_argument("-o", "--outdir", default="./alg_dispersion_plots",
-        help="Output directory for plots (default: ./alg_dispersion_plots)")
+    parser.add_argument("-o", "--outdir", default="./alg_dispersal_plots",
+        help="Output directory for plots (default: ./alg_dispersal_plots)")
     parser.add_argument("-m", "--minsig", type=float, default=0.05,
         help="Fisher's Exact Test p-value threshold for significance (default: 0.05)")
     parser.add_argument("-s", "--species",
@@ -235,9 +248,9 @@ def calculate_alg_conservation_per_species(rbh_file, algname, sorted_algs, minsi
     
     return alg_conservation
 
-def plot_dispersion_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, species_to_lineage=None):
+def plot_dispersal_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, species_to_lineage=None):
     """
-    Create ALG dispersion plot for all species.
+    Create ALG dispersal plot for all species.
     
     For each species:
     1. Calculate conservation for each ALG
@@ -256,16 +269,11 @@ def plot_dispersion_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, spec
     # Total genes per ALG (from the ALG database)
     total_genes_per_alg = alg_sizes.copy()
     
-    # Define dispersion bins based on MEDIAN ALG conservation
-    # High dispersion = low conservation, low dispersion = high conservation
-    dispersion_bins = {
-        '0%-20% dispersion': (0.8, 1.0),    # Low dispersion = high conservation
-        '40%-60% dispersion': (0.4, 0.6),   # Medium dispersion = medium conservation
-        '80%-100% dispersion': (0.0, 0.2)   # High dispersion = low conservation
-    }
-    
+    # Dispersal bins are module-level (see DISPERSAL_BINS).
+    dispersal_bins = DISPERSAL_BINS
+
     # Data structure: {bin_name: {alg: [conservation fractions]}}
-    bin_to_alg_data = {bin_name: {alg: [] for alg in sorted_algs} for bin_name in dispersion_bins.keys()}
+    bin_to_alg_data = {bin_name: {alg: [] for alg in sorted_algs} for bin_name in dispersal_bins.keys()}
     
     # Process each species
     num_species = len(species_to_rbh)
@@ -316,13 +324,8 @@ def plot_dispersion_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, spec
         
         species_conservation_data.append(species_data)
         
-        # Determine which bin this species belongs to
-        target_bin = None
-        for bin_name, (lower, upper) in dispersion_bins.items():
-            if lower <= median_conservation <= upper:
-                target_bin = bin_name
-                break
-        
+        # Determine which bin this species belongs to.
+        target_bin = _assign_dispersal_bin(median_conservation, dispersal_bins)
         if target_bin is None:
             continue
         
@@ -337,10 +340,10 @@ def plot_dispersion_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, spec
     
     # Create figure
     fig, axes = plt.subplots(1, 3, figsize=(22.5, 6))
-    fig.suptitle(f"ALG conservation dispersion (FET p<{minsig})", fontsize=14)
+    fig.suptitle(f"ALG conservation dispersal (FET p<{minsig})", fontsize=14)
     
     # Plot each bin
-    for idx, bin_name in enumerate(['0%-20% dispersion', '40%-60% dispersion', '80%-100% dispersion']):
+    for idx, bin_name in enumerate(['0%-20% dispersal', '40%-60% dispersal', '80%-100% dispersal']):
         ax = axes[idx]
         ax.set_title(bin_name)
         ax.set_xlabel(f"{algname} ALG")
@@ -386,7 +389,7 @@ def plot_dispersion_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, spec
     
     # Save plot
     os.makedirs(outdir, exist_ok=True)
-    outfile = os.path.join(outdir, f"ALG_dispersion_{algname}.pdf")
+    outfile = os.path.join(outdir, f"ALG_dispersal_{algname}.pdf")
     plt.savefig(outfile, format='pdf', bbox_inches='tight')
     plt.close()
     print(f"Saved plot to {outfile}", file=sys.stderr)
@@ -403,13 +406,13 @@ def plot_dispersion_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, spec
         
         # Print summary
         print("\n=== TOP 10 MOST CONSERVED GENOMES ===", file=sys.stderr)
-        print("(High median ALG conservation = low dispersion)", file=sys.stderr)
+        print("(High median ALG conservation = low dispersal)", file=sys.stderr)
         for idx, row in ranking_df.head(10).iterrows():
             lineage_str = f" [{row['lineage']}]" if 'lineage' in row and pd.notna(row['lineage']) else ""
             print(f"  {row['species']}: {row['median_conservation']:.3f} (n={int(row['num_algs_detected'])} ALGs){lineage_str}", file=sys.stderr)
         
         print("\n=== TOP 10 MOST DISPERSED GENOMES ===", file=sys.stderr)
-        print("(Low median ALG conservation = high dispersion)", file=sys.stderr)
+        print("(Low median ALG conservation = high dispersal)", file=sys.stderr)
         for idx, row in ranking_df.tail(10).iterrows():
             lineage_str = f" [{row['lineage']}]" if 'lineage' in row and pd.notna(row['lineage']) else ""
             print(f"  {row['species']}: {row['median_conservation']:.3f} (n={int(row['num_algs_detected'])} ALGs){lineage_str}", file=sys.stderr)
@@ -417,7 +420,7 @@ def plot_dispersion_by_alg(species_to_rbh, alg_df, algname, minsig, outdir, spec
 
 def main(argv=None):
     args = parse_args(argv)
-    
+
     # Parse ALG database
     print(f"Loading ALG database: {args.alg_rbh}", file=sys.stderr)
     try:
@@ -456,8 +459,8 @@ def main(argv=None):
         print(f"\nLoading metadata from {args.metadata}...", file=sys.stderr)
         species_to_lineage = parse_metadata(args.metadata, args.species_col, args.lineage_col)
     
-    # Create dispersion plot
-    plot_dispersion_by_alg(species_to_rbh, alg_df, args.algname, args.minsig, args.outdir, species_to_lineage)
+    # Create dispersal plot
+    plot_dispersal_by_alg(species_to_rbh, alg_df, args.algname, args.minsig, args.outdir, species_to_lineage)
     
     print("Done!", file=sys.stderr)
     return 0

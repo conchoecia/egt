@@ -26,8 +26,8 @@ Description:
         - There are several sections where we add the colocalization results to this table
         - ALG Presence+Absence Columns
         - ALG Colocalization Columns
-    4. ALG Dispersion, fusion, and splits. We keep track of what is going on using cutoffs.
-      - This is the section of the code called 'ALG Dispersion and Fusion'
+    4. ALG Dispersal, fusion, and splits. We keep track of what is going on using cutoffs.
+      - This is the section of the code called 'ALG Dispersal and Fusion'
       - The format is [taxid, "(gain|loss|split)", "taxid", "(gain|loss|split)", ...]
     5. The results are saved to a file called per_species_ALG_presence_fusions.tsv
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from egt import plot_alg_dispersion as pad
+from egt import plot_alg_dispersal as pad
 
 
 class FakeNCBI:
@@ -19,7 +19,7 @@ def test_parse_args_and_metadata_helpers(monkeypatch, tmp_path: Path):
     alg_rbh = tmp_path / "alg.rbh"
     alg_rbh.write_text("x\n")
     args = pad.parse_args(["-d", str(directory), "-a", str(alg_rbh)])
-    assert args.outdir.endswith("alg_dispersion_plots")
+    assert args.outdir.endswith("alg_dispersal_plots")
 
     monkeypatch.setattr(pad, "NCBITaxa", lambda: FakeNCBI())
     assert pad.taxidstring_to_lineage("1;-67;2", FakeNCBI()) == "Taxon1;Myriazoa;Taxon2"
@@ -86,7 +86,7 @@ def test_species_file_discovery_and_conservation_calc(monkeypatch, tmp_path: Pat
     assert pad.calculate_alg_conservation_per_species("ignored", "ALG", ["A"], minsig=0.05) == {}
 
 
-def test_plot_dispersion_by_alg_and_main(monkeypatch, tmp_path: Path):
+def test_plot_dispersal_by_alg_and_main(monkeypatch, tmp_path: Path):
     species_to_rbh = {"sp1": "a.rbh", "sp2": "b.rbh"}
     alg_df = pd.DataFrame(
         {
@@ -102,7 +102,7 @@ def test_plot_dispersion_by_alg_and_main(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(pad, "calculate_alg_conservation_per_species", fake_calc)
     monkeypatch.setattr(pad, "NCBITaxa", lambda: FakeNCBI())
     outdir = tmp_path / "out"
-    pad.plot_dispersion_by_alg(species_to_rbh, alg_df, "ALG", 0.05, str(outdir), species_to_lineage={"sp1": "L1", "sp2": "L2"})
+    pad.plot_dispersal_by_alg(species_to_rbh, alg_df, "ALG", 0.05, str(outdir), species_to_lineage={"sp1": "L1", "sp2": "L2"})
     assert any(path.suffix == ".pdf" for path in outdir.iterdir())
 
     alg_rbh = tmp_path / "alg.rbh"
@@ -115,6 +115,6 @@ def test_plot_dispersion_by_alg_and_main(monkeypatch, tmp_path: Path):
         "parse_ALG_rbh_to_colordf",
         lambda _path: pd.DataFrame({"ALGname": ["A", "B"], "Size": [10, 20], "Color": ["#111111", "#222222"]}),
     )
-    monkeypatch.setattr(pad, "plot_dispersion_by_alg", lambda *args, **kwargs: outdir.mkdir(exist_ok=True))
+    monkeypatch.setattr(pad, "plot_dispersal_by_alg", lambda *args, **kwargs: outdir.mkdir(exist_ok=True))
     rc = pad.main(["-d", str(rbhs), "-a", str(alg_rbh), "-o", str(outdir)])
     assert rc == 0
