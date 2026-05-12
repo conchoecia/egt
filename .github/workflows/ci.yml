@@ -51,7 +51,7 @@ jobs:
         run: python -m compileall -q src/egt
 
       - name: Run test suite (with coverage)
-        run: pytest tests/ -n auto --tb=short --cov=egt --cov-report=xml:coverage.xml --cov-report=term
+        run: pytest tests/ -v --tb=short --cov=egt --cov-report=xml:coverage.xml --cov-report=term
 
       - name: Generate coverage badge
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && github.ref == 'refs/heads/main' && github.event_name == 'push'

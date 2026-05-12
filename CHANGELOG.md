@@ -15,7 +15,6 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 - `egt decay-pairwise --column-width-mm <int>` — additionally emit `panels_CD_<N>mm.pdf` with total figure width exactly N millimeters; axes width solved from N and the fixed inch-anchored margins. Common values: 90 (single-column), 180 (double-column). Widths too small to fit margins raise `ValueError`.
 - `egt decay-pairwise --axes-aspect <float>` — per-panel data-box width / height ratio (default ~1.236 = 0.9621 / 0.7786, the original axes geometry). Locks aspect across column widths so panels never stretch.
 - `bump-my-version` tooling — `[tool.bumpversion]` config + dev extra. Future bumps: `bump-my-version bump <patch|minor|major> && git push --follow-tags`.
-- `pytest-xdist` in dev extras + `pytest -n auto` in CI for in-job test parallelism.
 - `CHANGELOG.md` reformatted to Keep-a-Changelog 1.1.0; pre-existing v0.1.0 and v0.2.0 entries preserved, v0.2.1 placeholder added.
 
 ### Changed
@@ -24,7 +23,7 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 - Typography across `decay-pairwise` panels: Helvetica with Arial / DejaVu Sans fallback, `pdf.fonttype = 42` (TrueType embedded, text stays editable in Illustrator), 0.4 pt axes/spines, 6 pt ticks, 7 pt body, no minor ticks, no gridlines, no top/right spines, no figure title. "Mya" replaces "MYA"; sentence-case axis labels.
 - `egt phylotreeumap` interactive HTML output: right-side dashboard restructured (sticky Active-view banner, tabbed Summary / Legend / Rows readout), structured exploration summary card (n, scope, MRCA, shared lineage, composition), clickable legend chips re-select a color group with per-group copy-samples button, linked-tree leaf hover tooltips + Hide/Show control, custom-taxonomy helper (Myriazoa / Parahoxozoa fake taxids -67 / -68 replace Eumetazoa in lineages), theming improvements, header genome counter.
 - `egt phylotreeumap-plotdfs` phyla plot: new layout via `paper_palette.yaml` + `paper_palette_simple.yaml`; clean PDF canvas alignment.
-- CI workflow (`.github/workflows/ci.yml`): runs pytest under `pytest-xdist` (`-n auto`) for in-job parallelism; adds `concurrency` block with `cancel-in-progress: true` so stale runs on force-push terminate.
+- CI workflow (`.github/workflows/ci.yml`): adds top-level `concurrency` block with `cancel-in-progress: true` so stale runs on rapid pushes terminate (saves CI minutes during force-push iteration on a PR branch).
 
 ### Fixed
 - Bokeh HTML rendering in `egt phylotreeumap`: inject `<style>` / `<script>` before the actual `</body>` (not the literal one inside DOMPurify's embedded source) via `str.rpartition` instead of `str.replace`.
