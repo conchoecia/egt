@@ -11,6 +11,9 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 ### Changed
 - PyPI release flow migrated to trusted publishing (OIDC) via the PyPA `gh-action-pypi-publish` action. `publish.yml` gates the `publish` job on a `pypi` GitHub environment (restricted to tag refs matching `v*`) and grants `id-token: write` for short-lived OIDC token exchange. The long-lived `EGT_PYPI_TOKEN` is no longer used by CI and can be revoked once a release confirms the new flow works.
 
+### Internal
+- v0.2.3 forced as a no-op release to exercise the trusted-publishing OIDC flow end-to-end before relying on it for a real change.
+
 ## [0.2.2] - 2026-05-12
 
 ### Added
