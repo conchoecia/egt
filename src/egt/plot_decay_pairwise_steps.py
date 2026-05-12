@@ -18,19 +18,27 @@ import matplotlib.pyplot as plt
 from egt._vendor import odp_plotting_functions as odp_plot
 #
 import argparse
+import numpy as np
 import pandas as pd
 import os
 import pickle
 import random
 import sys
 
-# Add source directory to path for rbh_tools import
-script_path = os.path.dirname(os.path.abspath(__file__))
-source_path = os.path.join(script_path, "../source")
-sys.path.insert(1, source_path)
 from egt import rbh_tools
+from egt.plot import (
+    ANIMAL_COLOR,
+    HOLOZOAN_COLORS,
+    HOLOZOAN_LABELS,
+    HOLOZOAN_SPECIES,
+    apply_rc,
+    density_alpha,
+    rgba_array,
+    style_axes,
+)
 import yaml
 from math import ceil as ceil
+from matplotlib.lines import Line2D
 from tqdm import tqdm
 
 # set up argparse method to get the directory of the .tsv files we want to plot
@@ -78,6 +86,10 @@ def parse_args(argv=None):
     parser.add_argument("--ALG_rbh_dir",
         help="Directory containing species vs ALG RBH files (e.g., /path/to/rbh_files/) for ALG mapping. "
              "Files should be named like {species}_vs_{ALGname}.rbh")
+    parser.add_argument("--sa-1-column", dest="sa_1_column", action="store_true",
+        help="Additionally emit a Science Advances 1-column (90 mm) "
+             "side-by-side C+D PDF (panels_CD_90mm.pdf) using the "
+             "SA-compliant typography and density-scaled scatter.")
     args = parser.parse_args(argv)
     # if the length of args is 0 print the help and quit
     if argv is None and len(sys.argv) == 1:
@@ -1038,203 +1050,354 @@ def get_chromosome_to_dominant_alg(species, alg_rbh_dir, alg_rbh_file, algname):
     print(f"  Mapped {len(chrom_to_dominant_alg)} chromosomes to dominant ALGs for {species}", file=sys.stderr)
     return chrom_to_dominant_alg, alg_to_color
 
-def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50, 
-                                    alg_rbh_file=None, alg_rbh_dir=None, algname="BCnS"):
+def _sa_scatter_panel(ax, animals_df, holos_df, *,
+                      point_size=2.0,
+                      base_alpha=0.50,
+                      alpha_min=0.10,
+                      alpha_max=0.55,
+                      density_bin=40.0,
+                      density_reference="min",
+                      x_jitter=20.0,
+                      rng_seed=0):
+    """Render one Science Advances–style scatter panel.
+
+    Animal points get a density-scaled per-point alpha (so dense
+    TimeTree clusters don't dominate) and ±x_jitter Mya jitter to
+    reveal density within a single TimeTree split. Holozoan rows are
+    drawn as black-outlined diamonds at exact divergence time with
+    species-specific colors so a reader can match values back to the
+    caption.
+
+    Required columns: ``divergence_time``, ``fraction_conserved``;
+    ``holos_df`` also needs ``species``.
     """
-    This takes a list of files and plots the decay of sp1 vs all the other species
-      Does this for whole chromosomes and for whole genomes (chromosomes summed).
+    if len(animals_df) > 0:
+        x_raw = animals_df["divergence_time"].to_numpy(dtype=float)
+        if x_jitter > 0:
+            rng = np.random.default_rng(rng_seed)
+            x = x_raw + rng.uniform(-x_jitter, x_jitter, size=x_raw.size)
+        else:
+            x = x_raw
+        alphas = density_alpha(x_raw, bin_width=density_bin,
+                               base_alpha=base_alpha,
+                               alpha_min=alpha_min, alpha_max=alpha_max,
+                               reference=density_reference)
+        rgba = rgba_array(ANIMAL_COLOR, alphas)
+        ax.scatter(x, animals_df["fraction_conserved"], s=point_size,
+                   c=rgba, alpha=None, linewidths=0, rasterized=True)
 
-    The left subplot will have the whole-genome conservation vs divergence time.
-    The right subplot will have the per-chromosome conservation vs divergence time.
+    for sp, sub in holos_df.groupby("species"):
+        color = HOLOZOAN_COLORS.get(sp, "#000000")
+        label = HOLOZOAN_LABELS.get(sp, sp)
+        ax.scatter(sub["divergence_time"], sub["fraction_conserved"],
+                   marker="D", s=7, c=color,
+                   edgecolor="black", linewidths=0.3, zorder=6,
+                   label=label)
 
-    sp1 is the focal species that appears in every pairwise comparison
-    filestruct is a dictionary of dictionaries. The first key is the focal species.
-      The second keys are the species to which the focal species is being compared.
-      The value of the second key is the path to the tsv file to use for the comparison.
+    style_axes(ax)
 
-    Plot [0][0] (top-left)  is the whole-genome conservation vs divergence time.
-         [0][1] (top-right) is the per-chromosome conservation vs divergence time.
-         [1][0] (bottom-left)  is a violin plot of every 25 million years of divergence time-whole genomes
-         [1][1] (bottom-right) is a violin plot of every 25 million years of divergence time-per-chromosome
-    
-    Parameters:
-    -----------
+
+def _emit_sa_cd_90mm(sp1, wg_records, pc_records, outdir, *,
+                     holozoan_species):
+    """Emit the Science Advances 1-column (90 mm) C+D side-by-side PDF.
+
+    Each axes data box is exactly 0.9621 in × 0.7786 in (manuscript
+    middle-panel spec). Inch-anchored margins keep the data boxes the
+    requested size regardless of label widths. Helvetica throughout,
+    text editable (`pdf.fonttype = 42`), 0.4 pt axes/spines.
+    """
+    AX_W, AX_H = 0.9621, 0.7786
+    MARGIN_L, MARGIN_R = 0.42, 0.15
+    MARGIN_B, MARGIN_T = 0.65, 0.18
+    WSPACE_IN = 0.10
+
+    fig_w = MARGIN_L + 2 * AX_W + WSPACE_IN + MARGIN_R
+    fig_h = MARGIN_B + AX_H + MARGIN_T
+
+    fig, axes = plt.subplots(1, 2, figsize=(fig_w, fig_h), sharey=True,
+                             gridspec_kw=dict(wspace=WSPACE_IN / AX_W))
+    ax_c, ax_d = axes
+    fig.subplots_adjust(
+        left=MARGIN_L / fig_w,
+        right=1 - MARGIN_R / fig_w,
+        bottom=MARGIN_B / fig_h,
+        top=1 - MARGIN_T / fig_h,
+    )
+
+    holozoan_set = set(holozoan_species)
+    wg_df = pd.DataFrame(wg_records,
+                         columns=["species", "divergence_time", "fraction_conserved"])
+    pc_df = pd.DataFrame(pc_records,
+                         columns=["species", "divergence_time", "fraction_conserved"])
+    wg_animals = wg_df[~wg_df["species"].isin(holozoan_set)]
+    wg_holos   = wg_df[ wg_df["species"].isin(holozoan_set)]
+    pc_animals = pc_df[~pc_df["species"].isin(holozoan_set)]
+    pc_holos   = pc_df[ pc_df["species"].isin(holozoan_set)]
+
+    _sa_scatter_panel(ax_c, wg_animals, wg_holos,
+                      point_size=2.0, base_alpha=0.50,
+                      alpha_min=0.10, alpha_max=0.55,
+                      density_reference="min", x_jitter=20.0, rng_seed=1)
+    _sa_scatter_panel(ax_d, pc_animals, pc_holos,
+                      point_size=0.9, base_alpha=0.40,
+                      alpha_min=0.03, alpha_max=0.55,
+                      density_reference="min", x_jitter=20.0, rng_seed=2)
+
+    xmax_candidates = []
+    if len(wg_df) > 0:
+        xmax_candidates.append(wg_df["divergence_time"].max())
+    if len(pc_df) > 0:
+        xmax_candidates.append(pc_df["divergence_time"].max())
+    xmax = (max(xmax_candidates) + 30) if xmax_candidates else 1100
+    for ax in (ax_c, ax_d):
+        ax.set_xlim(0, xmax)
+        ax.set_ylim(-0.02, 1.02)
+        ax.tick_params(axis="both", which="both", labelsize=6)
+
+    ax_c.set_ylabel("Fraction conserved", fontsize=7)
+    ax_d.set_ylabel("")
+
+    holo_handles = [
+        Line2D([0], [0], marker="D", linestyle="none",
+               markerfacecolor=HOLOZOAN_COLORS[sp],
+               markeredgecolor="black", markeredgewidth=0.35,
+               markersize=3, label=HOLOZOAN_LABELS[sp])
+        for sp in HOLOZOAN_COLORS
+        if sp in holozoan_set
+    ]
+    if holo_handles:
+        fig.legend(handles=holo_handles, loc="lower center",
+                   bbox_to_anchor=(0.5, 0.02), fontsize=6, ncol=3,
+                   handlelength=0.6, borderpad=0.1, handletextpad=0.25,
+                   columnspacing=0.8, labelspacing=0.18)
+
+    for ax, letter in zip([ax_c, ax_d], "CD"):
+        ax.text(0.0, 1.02, letter, transform=ax.transAxes,
+                fontsize=9, fontweight="bold", va="bottom", ha="left",
+                family="sans-serif")
+
+    fig.text(0.5, (MARGIN_B - 0.20) / fig_h,
+             f"Divergence time (Mya) from {sp1}",
+             ha="center", va="center", fontsize=7)
+
+    os.makedirs(outdir, exist_ok=True)
+    outfile = os.path.join(outdir, "panels_CD_90mm.pdf")
+    fig.savefig(outfile, format="pdf", dpi=600)
+    plt.close(fig)
+    print(f"Saved Science Advances 1-column figure to {outfile}", file=sys.stderr)
+
+
+def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50,
+                                    alg_rbh_file=None, alg_rbh_dir=None,
+                                    algname="BCnS", sa_1_column=False,
+                                    holozoan_species=None):
+    """
+    Plot pairwise chromosome decay of sp1 versus every other species in
+    ``filestruct[sp1]``, in the Science Advances scatter style.
+
+    Top-left  (axes[0][0]) — whole-genome conservation vs divergence time.
+    Top-right (axes[0][1]) — per-chromosome conservation vs divergence time.
+    Bottom-left  (axes[1][0]) — whole-genome violins per time bin.
+    Bottom-right (axes[1][1]) — per-chromosome violins per time bin.
+
+    Scatter panels use blue Okabe-Ito animal points with a density-scaled
+    per-point alpha (sparse-bin reference, so dense TimeTree clusters
+    don't oversaturate) and ±20 Mya x-jitter, plus diamond markers for
+    holozoan callouts drawn at exact divergence times.
+
+    Parameters
+    ----------
+    sp1, filestruct :
+        Focal species + nested dict of per-pair TSV paths.
+    outdir : str
+        Output directory (created if missing).
     bin_size : int
-        Time bin size in million years for violin plots (default: 50)
+        Violin-plot time bin width (Mya).
+    alg_rbh_file, alg_rbh_dir, algname :
+        Retained for backwards-compat. The SA scatter no longer colors
+        chromosomes by dominant ALG (one blue + holozoan callouts), but
+        callers still pass these for other code paths.
+    sa_1_column : bool
+        If True, additionally emit ``panels_CD_90mm.pdf`` — the Science
+        Advances 1-column (90 mm) submission figure with each axes data
+        box at exactly 0.9621 × 0.7786 in.
+    holozoan_species : iterable[str] | None
+        Species IDs to draw as holozoan callouts. Defaults to
+        :data:`egt.plot.HOLOZOAN_SPECIES`.
     """
-    # BIN_SIZE is the number of millions of years to bin the data
-    BIN_SIZE = bin_size
-    sp_bins  = { x:[] for x in range(BIN_SIZE, 1500, BIN_SIZE) }
-    chr_bins = { x:[] for x in range(BIN_SIZE, 1500, BIN_SIZE) }
-    # This sort order is used to make sure that all of the chromosomes are in the same order
-    # for the later plots.
-    sp1_sort_order = []
-    
-    # Track skipped species
-    skipped_species = []
-    
-    # Get ALG color mapping for focal species chromosomes
-    chrom_to_alg_color = {}
-    if alg_rbh_file and alg_rbh_dir:
-        print(f"\nMapping chromosomes to dominant ALGs for {sp1}...", file=sys.stderr)
-        chrom_to_dominant_alg, alg_to_color = get_chromosome_to_dominant_alg(
-            sp1, alg_rbh_dir, alg_rbh_file, algname)
-        # Create simplified mapping: chrom -> color
-        for chrom, (alg, color) in chrom_to_dominant_alg.items():
-            chrom_to_alg_color[chrom] = color
-    
-    # Default color if no ALG mapping
-    default_color = '#1f77b4'
+    apply_rc()
+    holozoan_set = set(holozoan_species) if holozoan_species is not None else set(HOLOZOAN_SPECIES)
 
-    # We start by making a subplot array. Only 2 rows: scatter plots (row 0) and violin plots (row 1)
+    BIN_SIZE = bin_size
+    sp_bins  = {x: [] for x in range(BIN_SIZE, 1500, BIN_SIZE)}
+    chr_bins = {x: [] for x in range(BIN_SIZE, 1500, BIN_SIZE)}
+    sp1_sort_order = []
+    skipped_species = []
+
+    # Records collected during the loop, used by the SA scatter renderer.
+    wg_records = []   # (species, divergence_time, fraction_conserved)
+    pc_records = []   # one per sp2 × chromosome
+
     NUMBER_OF_ROWS = 2
     NUMBER_OF_COLS = 2
-    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_COLS, figsize = (7.5 * NUMBER_OF_COLS, 6 * NUMBER_OF_ROWS))
-    fig.suptitle("{} decay versus divergence time".format(sp1))
-    
-    # Collect chromosome data by color for batch plotting (much faster than individual scatter calls)
-    chrom_data_by_color = {}  # {color: {'x': [], 'y': []}}
-    
-    # Progress tracking
+    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_COLS,
+                             figsize=(7.5 * NUMBER_OF_COLS, 6 * NUMBER_OF_ROWS))
+
     total_pairs = len(filestruct[sp1].keys())
     processed_count = 0
     print(f"\nPlotting {total_pairs} species pairs...", file=sys.stderr)
-    
+
     for sp2 in filestruct[sp1].keys():
         processed_count += 1
-        print(f"\r  Progress: {processed_count}/{total_pairs} species pairs ({100*processed_count/total_pairs:.1f}%)          ", end='', file=sys.stderr)
-        
+        print(f"\r  Progress: {processed_count}/{total_pairs} species pairs "
+              f"({100*processed_count/total_pairs:.1f}%)          ",
+              end='', file=sys.stderr)
+
         sp1_sp2_decay = pd.read_csv(filestruct[sp1][sp2], sep="\t")
-        
-        # Skip if no data
         if len(sp1_sp2_decay) == 0:
             skipped_species.append(sp2)
             continue
-            
-        if sp1_sort_order == []:
-            # we should sort this by the chromosome size, smallest to largest
-            sp1_sort_order = sp1_sp2_decay.sort_values(by="sp1_scaf_genecount", ascending=True)["sp1_scaf"].tolist()
 
-        # sort the dataframe by the sp1_sort_order
+        if sp1_sort_order == []:
+            sp1_sort_order = sp1_sp2_decay.sort_values(
+                by="sp1_scaf_genecount", ascending=True
+            )["sp1_scaf"].tolist()
+
         sp1_sp2_decay = sp1_sp2_decay.set_index("sp1_scaf").reindex(sp1_sort_order).reset_index()
-        
-        # get the most abundant divergence time from sp1_sp2_decay
-        # They should all be the same, but this is the most robust thing to do.
+
         divergence_time_mode = sp1_sp2_decay["divergence_time"].mode()
         if len(divergence_time_mode) == 0:
             skipped_species.append(sp2)
             continue
         divergence_time = divergence_time_mode[0]
-        # figure out which bin this divergence time goes into.
-        # The bin will be a multiple of 25.
-        # The correct bin is the closest multiple of 25 to the divergence time, rounded up
-        divergence_time_bin = int(BIN_SIZE * ceil(divergence_time/BIN_SIZE))
-        # Make a whole-genome version of the dataframe. Sum only numeric columns to avoid issues
+        divergence_time_bin = int(BIN_SIZE * ceil(divergence_time / BIN_SIZE))
+
         total_genes = sp1_sp2_decay["sp1_scaf_genecount"].sum()
         total_conserved = sp1_sp2_decay["conserved"].sum()
-        total_scattered = sp1_sp2_decay["scattered"].sum()
-        
-        sp1_sp2_whole = pd.DataFrame([{
-            "sp1_scaf_genecount": total_genes,
-            "conserved": total_conserved,
-            "scattered": total_scattered,
-            "divergence_time": divergence_time,
-            "fraction_conserved": total_conserved / total_genes if total_genes > 0 else 0
-        }])
+        whole_fraction = total_conserved / total_genes if total_genes > 0 else 0.0
 
-        #on the left-plot just do a scatterplot of the fraction conserved vs divergence time
-        axes[0][0].scatter(sp1_sp2_whole["divergence_time"], sp1_sp2_whole["fraction_conserved"], 
-                          color='#1f77b4', s=50, alpha=0.6, edgecolors='none')
-        axes[0][0].set_xlabel("Divergence time (MYA)")
-        axes[0][0].set_ylabel("Fraction conserved on orthologous chromosomes")
-        axes[0][0].set_title("Whole-genome conservation vs divergence time")
+        wg_records.append((sp2, float(divergence_time), float(whole_fraction)))
+        for _, row in sp1_sp2_decay.iterrows():
+            pc_records.append((sp2, float(row["divergence_time"]),
+                               float(row["fraction_conserved"])))
 
-        # Collect per-chromosome data by color for batch plotting
-        # Instead of calling scatter() for each chromosome, batch by color
-        for idx, row in sp1_sp2_decay.iterrows():
-            chrom = row['sp1_scaf']
-            color = chrom_to_alg_color.get(chrom, default_color)
-            
-            if color not in chrom_data_by_color:
-                chrom_data_by_color[color] = {'x': [], 'y': []}
-            
-            # Apply jitter and store
-            jittered_time = jitter(pd.Series([row['divergence_time']]), 10)[0]
-            chrom_data_by_color[color]['x'].append(jittered_time)
-            chrom_data_by_color[color]['y'].append(row['fraction_conserved'])
-
-        # add these values to the bins for plotting later
-        sp_bins[divergence_time_bin].append( sp1_sp2_whole["fraction_conserved"].tolist()[0])
+        sp_bins[divergence_time_bin].append(whole_fraction)
         chr_bins[divergence_time_bin].extend(sp1_sp2_decay["fraction_conserved"].tolist())
 
-    # remove the empty bins
-    sp_bins  = {x-(BIN_SIZE/2):sp_bins[x] for x in sp_bins.keys() if len(sp_bins[x]) > 0}
-    chr_bins = {x-(BIN_SIZE/2):chr_bins[x] for x in chr_bins.keys() if len(chr_bins[x]) > 0}
-    
-    print("\n  Creating per-chromosome scatter plot (batch plotting by color)...", file=sys.stderr)
-    # Flatten all points into single list with colors, then shuffle for random z-order
-    all_points = []
-    for color, data in chrom_data_by_color.items():
-        for x, y in zip(data['x'], data['y']):
-            all_points.append((x, y, color))
-    
-    # Shuffle to randomize z-order so colors don't smear over each other
-    random.shuffle(all_points)
-    
-    # Plot in randomized order
-    if len(all_points) > 0:
-        x_vals = [p[0] for p in all_points]
-        y_vals = [p[1] for p in all_points]
-        colors = [p[2] for p in all_points]
-        axes[0][1].scatter(x_vals, y_vals, c=colors, s=20, alpha=0.3, edgecolors='none')
-    
-    axes[0][1].set_xlabel("Divergence time (MYA) (+- 10 MYA jitter)")
-    axes[0][1].set_ylabel("Fraction conserved on orthologous chromosomes")
-    axes[0][1].set_title("Orthologous chromosome conservation vs divergence time (colored by dominant ALG)")
-    
-    # Print summary of skipped species
+    print("", file=sys.stderr)
+
+    # Partition records by holozoan membership for the SA scatter.
+    wg_df = pd.DataFrame(wg_records,
+                         columns=["species", "divergence_time", "fraction_conserved"])
+    pc_df = pd.DataFrame(pc_records,
+                         columns=["species", "divergence_time", "fraction_conserved"])
+
+    wg_animals = wg_df[~wg_df["species"].isin(holozoan_set)] if len(wg_df) else wg_df
+    wg_holos   = wg_df[ wg_df["species"].isin(holozoan_set)] if len(wg_df) else wg_df
+    pc_animals = pc_df[~pc_df["species"].isin(holozoan_set)] if len(pc_df) else pc_df
+    pc_holos   = pc_df[ pc_df["species"].isin(holozoan_set)] if len(pc_df) else pc_df
+
+    if len(wg_df) > 0:
+        _sa_scatter_panel(axes[0][0], wg_animals, wg_holos,
+                          point_size=12.0, base_alpha=0.50,
+                          alpha_min=0.10, alpha_max=0.55,
+                          density_reference="min",
+                          x_jitter=20.0, rng_seed=1)
+    else:
+        axes[0][0].text(0.5, 0.5, "No data", ha="center", va="center",
+                        transform=axes[0][0].transAxes)
+    axes[0][0].set_xlabel(f"Divergence time (Mya) from {sp1}")
+    axes[0][0].set_ylabel("Fraction conserved (whole genome)")
+
+    if len(pc_df) > 0:
+        _sa_scatter_panel(axes[0][1], pc_animals, pc_holos,
+                          point_size=4.0, base_alpha=0.40,
+                          alpha_min=0.03, alpha_max=0.55,
+                          density_reference="min",
+                          x_jitter=20.0, rng_seed=2)
+    else:
+        axes[0][1].text(0.5, 0.5, "No data", ha="center", va="center",
+                        transform=axes[0][1].transAxes)
+    axes[0][1].set_xlabel(f"Divergence time (Mya) from {sp1}")
+    axes[0][1].set_ylabel("Fraction conserved (per chromosome)")
+
+    # Drop empty violin bins; recentre to bin midpoint.
+    sp_bins  = {x - (BIN_SIZE / 2): sp_bins[x]  for x in sp_bins  if len(sp_bins[x])  > 0}
+    chr_bins = {x - (BIN_SIZE / 2): chr_bins[x] for x in chr_bins if len(chr_bins[x]) > 0}
+
+    if len(sp_bins) > 0 and all(len(v) > 0 for v in sp_bins.values()):
+        axes[1][0].violinplot(sp_bins.values(), sp_bins.keys(),
+                              points=10, widths=20,
+                              showmeans=False, showextrema=True, showmedians=True)
+    else:
+        axes[1][0].text(0.5, 0.5, "No data", ha="center", va="center",
+                        transform=axes[1][0].transAxes)
+    axes[1][0].set_xlabel(f"Divergence time (Mya) from {sp1}")
+    axes[1][0].set_ylabel("Fraction conserved (whole genome)")
+
+    if len(chr_bins) > 0 and all(len(v) > 0 for v in chr_bins.values()):
+        axes[1][1].violinplot(chr_bins.values(), chr_bins.keys(),
+                              points=5, widths=20,
+                              showmeans=False, showextrema=True, showmedians=True)
+    else:
+        axes[1][1].text(0.5, 0.5, "No data", ha="center", va="center",
+                        transform=axes[1][1].transAxes)
+    axes[1][1].set_xlabel(f"Divergence time (Mya) from {sp1}")
+    axes[1][1].set_ylabel("Fraction conserved (per chromosome)")
+
+    for ax in axes.flat:
+        ax.set_ylim(-0.05, 1.05)
+        style_axes(ax)
+
+    # Apply consistent x-limits across all 4 panels.
+    xlims_candidates = []
+    for ax in axes.flat:
+        lo, hi = ax.get_xlim()
+        if np.isfinite(lo) and np.isfinite(hi):
+            xlims_candidates.append((lo, hi))
+    if xlims_candidates:
+        lo = min(c[0] for c in xlims_candidates)
+        hi = max(c[1] for c in xlims_candidates)
+        for ax in axes.flat:
+            ax.set_xlim(lo, hi)
+
+    # Legend on top-right panel: animal + holozoan callouts.
+    legend_handles = [
+        Line2D([0], [0], marker="o", linestyle="none",
+               markerfacecolor=ANIMAL_COLOR, markeredgecolor="none",
+               markersize=4, label="Animal target"),
+    ]
+    legend_handles += [
+        Line2D([0], [0], marker="D", linestyle="none",
+               markerfacecolor=HOLOZOAN_COLORS[sp],
+               markeredgecolor="black", markeredgewidth=0.4,
+               markersize=4, label=HOLOZOAN_LABELS[sp])
+        for sp in HOLOZOAN_COLORS
+        if sp in holozoan_set
+    ]
+    axes[0][1].legend(handles=legend_handles, loc="upper right",
+                      fontsize=6, handlelength=1.2, borderpad=0.3,
+                      handletextpad=0.4, labelspacing=0.25)
+
     total_species = len(filestruct[sp1])
     plotted_species = total_species - len(skipped_species)
-    print(f"\nPlotting summary for {sp1}:", file=sys.stderr)
+    print(f"Plotting summary for {sp1}:", file=sys.stderr)
     print(f"  Total species pairs: {total_species}", file=sys.stderr)
     print(f"  Successfully plotted: {plotted_species}", file=sys.stderr)
     print(f"  Skipped (no data after filtering): {len(skipped_species)}", file=sys.stderr)
-    
-    # now we need to make the violin plots of all the bins (only if we have data)
-    if len(sp_bins) > 0 and all(len(v) > 0 for v in sp_bins.values()):
-        axes[1][0].violinplot(sp_bins.values(), sp_bins.keys(), points=10, widths=20, showmeans=False, showextrema=True, showmedians=True)
-    else:
-        print(f"  Warning: No whole-genome data for violin plots", file=sys.stderr)
-        axes[1][0].text(0.5, 0.5, 'No data', ha='center', va='center', transform=axes[1][0].transAxes)
-    
-    if len(chr_bins) > 0 and all(len(v) > 0 for v in chr_bins.values()):
-        axes[1][1].violinplot(chr_bins.values(), chr_bins.keys(), points=5, widths=20, showmeans=False, showextrema=True, showmedians=True)
-    else:
-        print(f"  Warning: No per-chromosome data for violin plots", file=sys.stderr)
-        axes[1][1].text(0.5, 0.5, 'No data', ha='center', va='center', transform=axes[1][1].transAxes)
 
-    # get the xlims and ylims for the top right plot
-    xlims = axes[0][1].get_xlim()
-    # set the xlims of all the plots
-    axes[0][0].set_xlim(xlims)
-    axes[1][0].set_xlim(xlims)
-    axes[1][1].set_xlim(xlims)
+    fig.tight_layout()
 
-    # set the ylims of all the figures from -0.05 to 1
-    axes[0][0].set_ylim(-0.05, 1.05)
-    axes[0][1].set_ylim(-0.05, 1.05)
-    axes[1][0].set_ylim(-0.05, 1.05)
-    axes[1][1].set_ylim(-0.05, 1.05)
-
-    # CALL THIS TO GET THE VISUAL STYLE WE NEED
-    odp_plot.format_matplotlib()
-
-    # safely make the output directory if it does not yet exist
     os.makedirs(outdir, exist_ok=True)
-    # Save the plot as a jpeg
     outprefix = "{}_decay_plot_vs_divergence_time".format(sp1)
     outdir_prefix = os.path.join(outdir, outprefix)
-    plt.savefig("{}.pdf".format(outdir_prefix), format='pdf')
+    fig.savefig("{}.pdf".format(outdir_prefix), format="pdf", dpi=600)
+    plt.close(fig)
+    print(f"Saved decay overview to {outdir_prefix}.pdf", file=sys.stderr)
+
+    if sa_1_column:
+        _emit_sa_cd_90mm(sp1, wg_records, pc_records, outdir,
+                         holozoan_species=holozoan_set)
 
 
 def plot_decay_twospecies(sp1, sp2, path_to_tsv, scaffolds_to_keep_sp1, outdir):
@@ -1444,8 +1607,9 @@ def main(argv=None):
         outdir = os.path.join("odp_pairwise_decay", sp1)
         outdir = os.path.join(outdir, "plot_overview_sp_sp")
         plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir, bin_size=args.bin_size,
-                                       alg_rbh_file=args.ALG_rbh, alg_rbh_dir=args.ALG_rbh_dir, 
-                                       algname=args.ALGname)
+                                       alg_rbh_file=args.ALG_rbh, alg_rbh_dir=args.ALG_rbh_dir,
+                                       algname=args.ALGname,
+                                       sa_1_column=args.sa_1_column)
         
         # make the dispersal plots
         outdir = os.path.join("odp_pairwise_decay", sp1)
