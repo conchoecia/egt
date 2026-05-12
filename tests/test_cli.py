@@ -41,7 +41,7 @@ SUBCOMMANDS_SMOKE = [
     "phylotreeumap",
     "phylotreeumap-subsample",
     "alg-fusions",
-    "alg-dispersion",
+    "alg-dispersal",
     "perspchrom-df-to-tree",
     "decay-pairwise",
     "decay-many-species",

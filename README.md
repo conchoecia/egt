@@ -141,7 +141,7 @@ pip install --no-deps -e .
 phylotreeumap             — UMAP-over-ALG-topology (MGT, MLT, ODOG subcommands)
 phylotreeumap-subsample   — subsample species phylogenetically with per-clade caps
 alg-fusions               — plot fusion events on a phylogeny (canonical v3)
-alg-dispersion            — plot ALG dispersion across species
+alg-dispersal             — plot ALG dispersal across species
 perspchrom-df-to-tree     — map perspective-chromosome changes onto a tree (Monte Carlo)
 decay-pairwise            — pairwise ALG-decay analysis
 decay-many-species        — cross-species ALG conservation / decay

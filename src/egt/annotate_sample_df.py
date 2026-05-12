@@ -29,7 +29,7 @@ from egt._vendor import odp_plotting_functions as odp_plot
 
 def gen_rbh_stats(samplerbhfilepath, algrbhfilepath, ALGname, outfilepath):
     """
-    This function generates the stats of an rbh file - namely the dispersion.
+    This function generates the stats of an rbh file - namely the dispersal.
     Things that are calculated for this are:
      - the number of proteins in the rbh file
      - the number of gene groups in the rbh file

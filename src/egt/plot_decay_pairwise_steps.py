@@ -627,9 +627,9 @@ def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size,
 
     return {sp1: sp_to_file_df}
 
-def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rbh_dir=None, outdir="./"):
+def plot_dispersal_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rbh_dir=None, outdir="./"):
     """
-    Plot ALG conservation rates categorized by MEDIAN ALG dispersion levels.
+    Plot ALG conservation rates categorized by MEDIAN ALG dispersal levels.
     
     For each species pair:
     1. Calculate conservation % for each ALG
@@ -638,7 +638,7 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
     4. Plot box-and-whisker distributions with ALGs sorted by size
     """
     if alg_rbh_file is None:
-        print(f"WARNING: No ALG RBH file provided, skipping dispersion plot for {sp1}", file=sys.stderr)
+        print(f"WARNING: No ALG RBH file provided, skipping dispersal plot for {sp1}", file=sys.stderr)
         return
     
     # Parse ALG database file to get ALG sizes and colors
@@ -672,15 +672,15 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
         else:
             print(f"WARNING: {sp1_alg_file} not found", file=sys.stderr)
     
-    # Define dispersion bins based on MEDIAN ALG conservation
-    dispersion_bins = {
-        '0%-20% dispersion': (0.0, 0.2),
-        '40%-60% dispersion': (0.4, 0.6),
-        '80%-100% dispersion': (0.8, 1.0)
+    # Define dispersal bins based on MEDIAN ALG conservation
+    dispersal_bins = {
+        '0%-20% dispersal': (0.0, 0.2),
+        '40%-60% dispersal': (0.4, 0.6),
+        '80%-100% dispersal': (0.8, 1.0)
     }
     
     # Data structure: {bin_name: {alg: [conservation values]}}
-    bin_to_alg_data = {bin_name: {alg: [] for alg in sorted_algs} for bin_name in dispersion_bins.keys()}
+    bin_to_alg_data = {bin_name: {alg: [] for alg in sorted_algs} for bin_name in dispersal_bins.keys()}
     
     # Collect data for each species pair
     num_pairs_processed = 0
@@ -729,7 +729,7 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
         
         # Determine which bin this species pair belongs to based on median
         target_bin = None
-        for bin_name, (lower, upper) in dispersion_bins.items():
+        for bin_name, (lower, upper) in dispersal_bins.items():
             if lower <= median_conservation <= upper:
                 target_bin = bin_name
                 break
@@ -744,14 +744,14 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
             if alg in alg_conservation:
                 bin_to_alg_data[target_bin][alg].append(alg_conservation[alg])
     
-    print(f"Dispersion plot: processed {num_pairs_processed} pairs, binned {num_pairs_binned}", file=sys.stderr)
+    print(f"Dispersal plot: processed {num_pairs_processed} pairs, binned {num_pairs_binned}", file=sys.stderr)
     
-    # Create figure with 3 panels (one for each dispersion bin)
+    # Create figure with 3 panels (one for each dispersal bin)
     fig, axes = plt.subplots(1, 3, figsize=(22.5, 6))
     fig.suptitle(f"{sp1} - Total conserved ALG orthologs on scaffolds with FET p<0.05", fontsize=14)
     
-    # Plot each dispersion bin
-    for idx, bin_name in enumerate(['0%-20% dispersion', '40%-60% dispersion', '80%-100% dispersion']):
+    # Plot each dispersal bin
+    for idx, bin_name in enumerate(['0%-20% dispersal', '40%-60% dispersal', '80%-100% dispersal']):
         ax = axes[idx]
         ax.set_title(bin_name)
         ax.set_xlabel(f"{algname} ALG")
@@ -797,13 +797,13 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
     
     # Save plot
     os.makedirs(outdir, exist_ok=True)
-    outprefix = f"{sp1}_ALG_dispersion_by_conservation"
+    outprefix = f"{sp1}_ALG_dispersal_by_conservation"
     outdir_prefix = os.path.join(outdir, outprefix)
     plt.savefig(f"{outdir_prefix}.pdf", format='pdf', bbox_inches='tight')
     plt.close()
-    print(f"Saved dispersion plot to {outdir_prefix}.pdf", file=sys.stderr)
+    print(f"Saved dispersal plot to {outdir_prefix}.pdf", file=sys.stderr)
     """
-    Plot ALG conservation rates categorized by MEDIAN ALG dispersion levels.
+    Plot ALG conservation rates categorized by MEDIAN ALG dispersal levels.
     
     For each species pair:
     1. Calculate conservation % for each ALG
@@ -812,7 +812,7 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
     4. Plot box-and-whisker distributions with ALGs sorted by size
     """
     if alg_rbh_file is None:
-        print(f"WARNING: No ALG RBH file provided, skipping dispersion plot for {sp1}", file=sys.stderr)
+        print(f"WARNING: No ALG RBH file provided, skipping dispersal plot for {sp1}", file=sys.stderr)
         return
     
     # Parse ALG database file to get ALG sizes and colors
@@ -827,15 +827,15 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
     alg_sizes = dict(zip(alg_df['ALGname'], alg_df['Size']))
     alg_colors = dict(zip(alg_df['ALGname'], alg_df['Color']))
     
-    # Define dispersion bins based on MEDIAN ALG conservation
-    dispersion_bins = {
-        '0%-20% dispersion': (0.0, 0.2),
-        '40%-60% dispersion': (0.4, 0.6),
-        '80%-100% dispersion': (0.8, 1.0)
+    # Define dispersal bins based on MEDIAN ALG conservation
+    dispersal_bins = {
+        '0%-20% dispersal': (0.0, 0.2),
+        '40%-60% dispersal': (0.4, 0.6),
+        '80%-100% dispersal': (0.8, 1.0)
     }
     
     # Data structure: {bin_name: {alg: [conservation values]}}
-    bin_to_alg_data = {bin_name: {alg: [] for alg in sorted_algs} for bin_name in dispersion_bins.keys()}
+    bin_to_alg_data = {bin_name: {alg: [] for alg in sorted_algs} for bin_name in dispersal_bins.keys()}
     
     # Collect data for each species pair
     num_pairs_processed = 0
@@ -878,7 +878,7 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
         
         # Determine which bin this species pair belongs to based on median
         target_bin = None
-        for bin_name, (lower, upper) in dispersion_bins.items():
+        for bin_name, (lower, upper) in dispersal_bins.items():
             if lower <= median_conservation <= upper:
                 target_bin = bin_name
                 break
@@ -893,14 +893,14 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
             if alg in alg_conservation:
                 bin_to_alg_data[target_bin][alg].append(alg_conservation[alg])
     
-    print(f"Dispersion plot: processed {num_pairs_processed} pairs, binned {num_pairs_binned}", file=sys.stderr)
+    print(f"Dispersal plot: processed {num_pairs_processed} pairs, binned {num_pairs_binned}", file=sys.stderr)
     
-    # Create figure with 3 panels (one for each dispersion bin)
+    # Create figure with 3 panels (one for each dispersal bin)
     fig, axes = plt.subplots(1, 3, figsize=(22.5, 6))
     fig.suptitle(f"{sp1} - Total conserved ALG orthologs on scaffolds with FET p<0.05", fontsize=14)
     
-    # Plot each dispersion bin
-    for idx, bin_name in enumerate(['0%-20% dispersion', '40%-60% dispersion', '80%-100% dispersion']):
+    # Plot each dispersal bin
+    for idx, bin_name in enumerate(['0%-20% dispersal', '40%-60% dispersal', '80%-100% dispersal']):
         ax = axes[idx]
         ax.set_title(bin_name)
         ax.set_xlabel(f"{algname} ALG")
@@ -946,11 +946,11 @@ def plot_dispersion_by_ALG(sp1, filestruct, alg_rbh_file, algname="BCnS", alg_rb
     
     # Save plot
     os.makedirs(outdir, exist_ok=True)
-    outprefix = f"{sp1}_ALG_dispersion_by_conservation"
+    outprefix = f"{sp1}_ALG_dispersal_by_conservation"
     outdir_prefix = os.path.join(outdir, outprefix)
     plt.savefig(f"{outdir_prefix}.pdf", format='pdf', bbox_inches='tight')
     plt.close()
-    print(f"Saved dispersion plot to {outdir_prefix}.pdf", file=sys.stderr)
+    print(f"Saved dispersal plot to {outdir_prefix}.pdf", file=sys.stderr)
 
 def get_chromosome_to_dominant_alg(species, alg_rbh_dir, alg_rbh_file, algname):
     """
@@ -1447,10 +1447,10 @@ def main(argv=None):
                                        alg_rbh_file=args.ALG_rbh, alg_rbh_dir=args.ALG_rbh_dir, 
                                        algname=args.ALGname)
         
-        # make the dispersion plots
+        # make the dispersal plots
         outdir = os.path.join("odp_pairwise_decay", sp1)
-        outdir = os.path.join(outdir, "plot_ALG_dispersion")
-        plot_dispersion_by_ALG(sp1, filestruct, args.ALG_rbh, args.ALGname, args.ALG_rbh_dir, outdir=outdir)
+        outdir = os.path.join(outdir, "plot_ALG_dispersal")
+        plot_dispersal_by_ALG(sp1, filestruct, args.ALG_rbh, args.ALGname, args.ALG_rbh_dir, outdir=outdir)
         #
         ### make individual sp-sp scatterplots
         #outdir = os.path.join("odp_pairwise_decay", sp1)

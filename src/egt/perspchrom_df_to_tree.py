@@ -140,9 +140,9 @@ def parse_gain_loss_string(GL_string, samplename) -> pd.DataFrame:
       1-131567-2759-33154-33208-6072-6073-6101-6132-3028843-86538-86539-2653460-2897299
 
     The string is formatted like so:
-        taxid-([colocalization list]|[ALG dispersion list])-taxid-([colocalization list].... etc.
+        taxid-([colocalization list]|[ALG dispersal list])-taxid-([colocalization list].... etc.
 
-    The colocalizations and ALG dispersions are placed between the ALG taxids, because these chages
+    The colocalizations and ALG dispersals are placed between the ALG taxids, because these chages
      happen on the phylogenetic branches between the NCBI taxids.
 
     Args:
@@ -520,7 +520,7 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                           Running many randomizations will allow us to get a null distribution of the
                           fusion stats on small vs large ALGs.
     Output:
-      - dispersion_df:  A dataframe that contains the information about the ALG losses.
+      - dispersal_df:  A dataframe that contains the information about the ALG losses.
       - coloc_df:       A dataframe that contains the information about the ALG colocalizations.
         - thisedge:     The edge on which the fusion/loss happened.
         - thiscoloc:    The colocalization that happened on this edge.
@@ -561,7 +561,7 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
     perspchromdf = perspchromdf.sample(frac=1, random_state=obs_seed)
 
     already_counted        = {}
-    dispersion_entries     = []
+    dispersal_entries     = []
     colocalization_entries = []
     ALG_coloc_entries      = []
     for i, row in perspchromdf.iterrows():
@@ -577,7 +577,7 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
             if row_change["colocalizations"] != [] or row_change["losses"] != []:
                 if thisedge not in already_counted:
                     already_counted[thisedge] = {"colocalizations": [], "losses": []}
-            # first we check if there have been any ALG dispersions
+            # first we check if there have been any ALG dispersals
             if row_change["losses"] != []:
                 # iterate through each loss event
                 for thisloss in row_change["losses"]:
@@ -595,7 +595,7 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                                      "loss_CC_percent_of_total":   node_size_CC_fraction_of_total_size(thisG, thisloss),
                                      "loss_CC_percent_of_largest": node_size_CC_fraction_of_largest(thisG, thisloss)
                                      }
-                        dispersion_entries.append(thisentry)
+                        dispersal_entries.append(thisentry)
                         #print("removing node {}".format(thisloss), " nodes are: {}".format(thisG.nodes))
                     # This must be outside the if statement, because we want to remove the node even if it has already been counted.
                     # This is the only way in which we can accurately model the loss of ALGs.
@@ -654,13 +654,13 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                     # If it has been counted already, we don't do anything.
                     else:
                         pass
-    # change the dispersion entries to a df
-    dispersion_df  = pd.DataFrame(dispersion_entries)
+    # change the dispersal entries to a df
+    dispersal_df  = pd.DataFrame(dispersal_entries)
     # change the colocalization entries to a df
     coloc_df = pd.DataFrame(colocalization_entries)
     # ALG_coloc_entries is a list of dicts. We want to make this into a dataframe.
     ALG_coloc_df = pd.DataFrame(ALG_coloc_entries)
-    return dispersion_df, coloc_df, ALG_coloc_df
+    return dispersal_df, coloc_df, ALG_coloc_df
 
 class coloc_array():
     """
@@ -1007,11 +1007,11 @@ def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
             print("   - Running simulation {}".format(counter + 1), end="\r")
         # get a random number. must be between 0 and 2^32 - 1
         random_integer = random.randint(0,4294967295)
-        dispersion_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+        dispersal_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                     obs_seed = random_integer, randomize_ALGs=False)
         c.add_matrix(          coloc_df, "observed")
         c.add_matrix_ALGs( ALG_coloc_df, "observed")
-        dispersion_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+        dispersal_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                     obs_seed = random_integer, randomize_ALGs=True)
         c.add_matrix(          coloc_df, "expected")
         c.add_matrix_ALGs( ALG_coloc_df, "expected")
@@ -2271,21 +2271,21 @@ def unit_test_coloc_array_identical():
     sampledf = pd.read_csv(sys.argv[1], sep="\t")
     algdf = rbh_tools.parse_ALG_rbh_to_colordf(sys.argv[2])
 
-    dispersion_df, coloc_df, ALG_coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+    dispersal_df, coloc_df, ALG_coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                    obs_seed = 10,
                                    randomize_ALGs=False)
 
-    dispersion_df2, coloc_df2, ALG_coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+    dispersal_df2, coloc_df2, ALG_coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                    obs_seed = 500,
                                    randomize_ALGs=False)
 
-    ## CHECK THE DISPERSION DFs
+    ## CHECK THE DISPERSAL DFs
     ## sort by thisedge, this loss, loss size. Just keep thisedge, thisloss
-    #dispersion_df = dispersion_df.sort_values(by=["thisedge", "thisloss", "loss_size"])[["thisedge", "thisloss"]].reset_index(drop=True)
-    #dispersion_df2 = dispersion_df2.sort_values(by=["thisedge", "thisloss", "loss_size"])[["thisedge", "thisloss"]].reset_index(drop=True)
+    #dispersal_df = dispersal_df.sort_values(by=["thisedge", "thisloss", "loss_size"])[["thisedge", "thisloss"]].reset_index(drop=True)
+    #dispersal_df2 = dispersal_df2.sort_values(by=["thisedge", "thisloss", "loss_size"])[["thisedge", "thisloss"]].reset_index(drop=True)
     ##check that the two dfs are the same
-    #if not dispersion_df.equals(dispersion_df2):
-    #    raise Exception("dispersion_dfs are not the same")
+    #if not dispersal_df.equals(dispersal_df2):
+    #    raise Exception("dispersal_dfs are not the same")
 
     # CHECK THE COLOCALIZATION DFs
     coloc_df  = coloc_df.sort_values( by=["thisedge", "thiscoloc"])[["thisedge", "thiscoloc"]].reset_index(drop=True)
@@ -2533,12 +2533,12 @@ def main(argv=None):
 
     #sampledf = pd.read_csv(sys.argv[1], sep="\t")
     #algdf = rbh_tools.parse_ALG_rbh_to_colordf(sys.argv[2])
-    #dispersion_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(
+    #dispersal_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(
     #                                            sampledf, algdf,
     #                                            obs_seed = 1,
     #                                            randomize_ALGs=False)
-    #print("This is a dispersion df")
-    #print(dispersion_df)
+    #print("This is a dispersal df")
+    #print(dispersal_df)
     #print("This is a coloc df")
     #print(coloc_df)
     #print("This is an ALG coloc df")

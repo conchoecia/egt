@@ -12,7 +12,7 @@ SUBCOMMANDS: dict[str, tuple[str, str]] = {
     "phylotreeumap":            ("egt.phylotreeumap",              "PhyloTreeUMAP — manifold projection of per-species ALG state"),
     "phylotreeumap-subsample":  ("egt.phylotreeumap_subsample",    "Subsample species for UMAP with per-clade caps"),
     "alg-fusions":              ("egt.plot_alg_fusions",           "Plot ALG fusion events across a phylogeny (v3)"),
-    "alg-dispersion":           ("egt.plot_alg_dispersion",        "Plot ALG dispersion across species"),
+    "alg-dispersal":            ("egt.plot_alg_dispersal",         "Plot ALG dispersal across species"),
     "perspchrom-df-to-tree":    ("egt.perspchrom_df_to_tree",      "Map perspective-chromosome changes onto a tree (Monte Carlo)"),
     "decay-pairwise":           ("egt.plot_decay_pairwise_steps",  "Pairwise evolutionary-decay analysis"),
     "decay-many-species":       ("egt.plot_decay_many_species",    "Cross-species ALG conservation / decay"),

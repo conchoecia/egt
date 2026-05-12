@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "egt"
-version = "0.2.0"
+version = "0.2.1"
 description = "Evolutionary Genome Topology — analysis toolkit for chromosome evolution across metazoan genomes using reciprocal-best-hits data."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -48,7 +48,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov"]
+dev = ["pytest>=7.0", "pytest-cov", "bump-my-version"]
 
 [project.urls]
 Homepage = "https://github.com/conchoecia/egt"
@@ -67,3 +67,27 @@ egt = ["py.typed", "data/*.yaml", "data/*.tsv"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+
+# bump-my-version: keeps pyproject.toml + __init__.py + the smoke-test
+# version assertion (if added later) in lockstep. Commits the change and
+# creates a v<NEW> tag. Push with `git push --follow-tags` (or use the
+# `--push` flag if a release remote is configured).
+[tool.bumpversion]
+current_version = "0.2.1"
+parse = '(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)'
+serialize = ["{major}.{minor}.{patch}"]
+commit = true
+tag = true
+tag_name = "v{new_version}"
+message = "Bump version: {current_version} → {new_version}"
+allow_dirty = false
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search  = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "src/egt/__init__.py"
+search  = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
