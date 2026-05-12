@@ -94,6 +94,12 @@ def parse_args(argv=None):
              "millimeters; axes width is solved from N and fixed "
              "margins. Common journal column widths: 90 (single "
              "column), 180 (double column).")
+    parser.add_argument("--axes-aspect", dest="axes_aspect",
+        type=float, default=None,
+        help="Aspect ratio (width / height) for each panel data box "
+             "when --column-width-mm is set. Default ~1.236 reproduces "
+             "the original 0.9621 × 0.7786 in axes geometry. Pass 1.0 "
+             "for square panels, larger for wider panels.")
     args = parser.parse_args(argv)
     # if the length of args is 0 print the help and quit
     if argv is None and len(sys.argv) == 1:
@@ -1101,24 +1107,28 @@ def _sa_scatter_panel(ax, animals_df, holos_df, *,
     style_axes(ax)
 
 
-def _emit_cd_column_width(sp1, wg_records, pc_records, outdir, *,
-                          width_mm, holozoan_species):
-    """Emit a column-width-fitting C+D side-by-side PDF.
+# Default panel data-box aspect ratio (width / height).
+# 0.9621 / 0.7786 ≈ 1.2357 reproduces the original axes geometry when
+# column_width_mm ≈ 66 (the actual figure width of the legacy
+# panels_CD_90mm.pdf output, despite the misleading filename).
+_DEFAULT_AXES_ASPECT = 0.9621 / 0.7786
 
-    The total figure width is exactly ``width_mm`` millimeters. Common
-    journal-column widths: 90 mm (single column), 180 mm (double
-    column). Axes width is solved from the target figure width and
-    fixed inch-anchored margins; axes height stays at 0.7786 in so the
-    data-box aspect ratio matches the original 90 mm preset (0.9621 ×
-    0.7786 in axes at width_mm=90). Helvetica, editable text
-    (`pdf.fonttype=42`), 0.4 pt axes/spines.
+
+def _compute_axes_dims(width_mm, axes_aspect, *,
+                       MM_PER_IN=25.4,
+                       MARGIN_L=0.42, MARGIN_R=0.15,
+                       MARGIN_B=0.65, MARGIN_T=0.18,
+                       WSPACE_IN=0.10):
+    """Pure helper: solve (fig_w, fig_h, AX_W, AX_H) for given column
+    width + axes aspect ratio under fixed inch-anchored margins.
+
+    Returns all four in inches. Margins do NOT scale with width — they
+    stay at their absolute (inch) size so label space stays constant
+    across column widths. Axes width is solved from fig_w; axes height
+    is solved from axes width and the requested aspect ratio
+    (``width / height``).
     """
-    MM_PER_IN = 25.4
     fig_w = width_mm / MM_PER_IN
-    AX_H = 0.7786
-    MARGIN_L, MARGIN_R = 0.42, 0.15
-    MARGIN_B, MARGIN_T = 0.65, 0.18
-    WSPACE_IN = 0.10
     AX_W = (fig_w - MARGIN_L - MARGIN_R - WSPACE_IN) / 2.0
     if AX_W <= 0:
         raise ValueError(
@@ -1126,7 +1136,38 @@ def _emit_cd_column_width(sp1, wg_records, pc_records, outdir, *,
             f"for axes after {MARGIN_L + MARGIN_R + WSPACE_IN:.2f} in of "
             f"margins + inter-panel spacing."
         )
+    if axes_aspect <= 0:
+        raise ValueError(f"axes_aspect must be > 0, got {axes_aspect!r}")
+    AX_H = AX_W / axes_aspect
     fig_h = MARGIN_B + AX_H + MARGIN_T
+    return fig_w, fig_h, AX_W, AX_H
+
+
+def _emit_cd_column_width(sp1, wg_records, pc_records, outdir, *,
+                          width_mm, axes_aspect=None, holozoan_species):
+    """Emit a column-width-fitting C+D side-by-side PDF.
+
+    Total figure width is exactly ``width_mm`` millimeters. Each panel
+    data box preserves a fixed aspect ratio (``axes_aspect`` =
+    width/height; default ≈ 1.236, matching the original
+    0.9621 × 0.7786 in geometry). Axes width is solved from the
+    requested figure width and the fixed inch-anchored margins, then
+    axes height is derived from axes width and the aspect ratio.
+    Margins stay constant so label space doesn't shrink at small
+    widths. Helvetica, editable text (``pdf.fonttype=42``), 0.4 pt
+    axes / spines. Common widths: 90 mm (single column), 180 mm
+    (double column).
+    """
+    if axes_aspect is None:
+        axes_aspect = _DEFAULT_AXES_ASPECT
+    MARGIN_L, MARGIN_R = 0.42, 0.15
+    MARGIN_B, MARGIN_T = 0.65, 0.18
+    WSPACE_IN = 0.10
+    fig_w, fig_h, AX_W, AX_H = _compute_axes_dims(
+        width_mm, axes_aspect,
+        MARGIN_L=MARGIN_L, MARGIN_R=MARGIN_R,
+        MARGIN_B=MARGIN_B, MARGIN_T=MARGIN_T, WSPACE_IN=WSPACE_IN,
+    )
 
     fig, axes = plt.subplots(1, 2, figsize=(fig_w, fig_h), sharey=True,
                              gridspec_kw=dict(wspace=WSPACE_IN / AX_W))
@@ -1204,7 +1245,7 @@ def _emit_cd_column_width(sp1, wg_records, pc_records, outdir, *,
 def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50,
                                     alg_rbh_file=None, alg_rbh_dir=None,
                                     algname="BCnS", column_width_mm=None,
-                                    holozoan_species=None):
+                                    axes_aspect=None, holozoan_species=None):
     """
     Plot pairwise chromosome decay of sp1 versus every other species in
     ``filestruct[sp1]``, in the Science Advances scatter style.
@@ -1235,8 +1276,14 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50,
         If set, additionally emit ``panels_CD_<N>mm.pdf`` — a column-
         width-fitting side-by-side figure with total figure width
         exactly ``column_width_mm`` millimeters. Axes width is solved
-        from N and fixed margins; axes height stays 0.7786 in. Common
-        values: 90 (single-column journal), 180 (double-column).
+        from N and fixed margins; axes height is derived from axes
+        width and ``axes_aspect`` so the panel data-box aspect ratio
+        stays constant across column widths. Common values: 90
+        (single-column journal), 180 (double-column).
+    axes_aspect : float | None
+        Per-panel data-box width / height ratio. Default ≈ 1.236
+        (matches the original 0.9621 × 0.7786 in geometry). Larger =
+        wider panels; smaller = taller panels.
     holozoan_species : iterable[str] | None
         Species IDs to draw as holozoan callouts. Defaults to
         :data:`egt.dispersal_panel_style.HOLOZOAN_SPECIES`.
@@ -1414,6 +1461,7 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./", bin_size=50,
     if column_width_mm is not None:
         _emit_cd_column_width(sp1, wg_records, pc_records, outdir,
                               width_mm=column_width_mm,
+                              axes_aspect=axes_aspect,
                               holozoan_species=holozoan_set)
 
 
@@ -1626,7 +1674,8 @@ def main(argv=None):
         plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir, bin_size=args.bin_size,
                                        alg_rbh_file=args.ALG_rbh, alg_rbh_dir=args.ALG_rbh_dir,
                                        algname=args.ALGname,
-                                       column_width_mm=args.column_width_mm)
+                                       column_width_mm=args.column_width_mm,
+                                       axes_aspect=args.axes_aspect)
         
         # make the dispersal plots
         outdir = os.path.join("odp_pairwise_decay", sp1)
