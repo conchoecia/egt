@@ -1,6 +1,10 @@
 # egt — Evolutionary Genome Topology
 
+[![CI](https://github.com/conchoecia/egt/actions/workflows/ci.yml/badge.svg)](https://github.com/conchoecia/egt/actions/workflows/ci.yml)
 ![Coverage](images/coverage-badge.svg)
+[![PyPI](https://img.shields.io/pypi/v/egt.svg)](https://pypi.org/project/egt/)
+[![Python versions](https://img.shields.io/pypi/pyversions/egt.svg)](https://pypi.org/project/egt/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
