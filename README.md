@@ -20,11 +20,19 @@ data from [`odp`](https://github.com/conchoecia/odp) and provides tools for:
 - Fourier-period analysis of rate time series
 - phylogenetic subsampling, tree prep, taxonomy utilities
 
-## Contents
+## Table of Contents
 
 - [Overview: what egt does and how to read its plots](#overview-what-egt-does-and-how-to-read-its-plots)
+  - [The core idea](#the-core-idea)
+  - [Reading the UMAP plots](#reading-the-umap-plots)
+  - [Where egt fits among comparative-genomics methods](#where-egt-fits-among-comparative-genomics-methods)
 - [Getting Started](#getting-started)
 - [Quick Start](#quick-start)
+  - [PhyloTreeUMAP](#phylotreeumap--manifold-projection-of-per-species-alg-state)
+  - [ALG fusion analysis](#alg-fusion-analysis-on-a-calibrated-tree)
+  - [Perspective-chromosome mapping](#perspective-chromosome-tree-mapping--monte-carlo-rates)
+  - [Rate, Fourier, and branch-stats analyses](#rate-analyses-fourier-periodicity-branch-stats)
+  - [Phylogeny preparation](#phylogeny-preparation)
 - [Users' Guide](#users-guide)
   - [Installation](#installation)
   - [Python requirements](#python-requirements)
