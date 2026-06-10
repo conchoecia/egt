@@ -41,6 +41,7 @@ SUBCOMMANDS: dict[str, object] = {
     "join-supplementary-tables":("egt.join_supplementary_tables",  "Join supplementary-table fragments"),
     "phylotreeumap-plotdfs":    ("egt.phylotreeumap_plotdfs",      "PhyloTreeUMAP plotting dataframes"),
     "umap-taxonomy-clusters":   ("egt.umap_taxonomy_clusters",     "Cluster points within an existing UMAP using taxonomy-aware labels"),
+    "inverse-transform":        ("egt.inverse_transform",          "Inverse-transform a UMAP manifold to find gene-family pairs characteristic of an embedding location"),
     "palette-preview":          ("egt.palette_preview",            "Render a tree colored by the paper palette (sanity-check)"),
     "pigeonhole-check":         ("egt.pigeonhole_check",           "Null-model test for shared ALG fusions on small karyotypes"),
     "divergence-vs-dispersal":  ("egt.divergence_vs_dispersal",    "Correlate protein divergence with ALG dispersal"),
