@@ -163,6 +163,7 @@ count-unique-changes      — count unique changes per branch
 defining-features         — identify clade-defining features
 defining-features-plot    — plot defining features
 defining-features-plotRBH — plot defining features on RBH dataframes
+inverse-transform         — gene-family pairs characteristic of a UMAP embedding region
 taxids-to-newick          — build a Newick tree from NCBI taxids
 newick-to-common-ancestors — divergence-time annotation from a timetree
 algs-split-across-scaffolds — find ALGs split across scaffolds

@@ -9,6 +9,7 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 ## [Unreleased]
 
 ### Added
+- `egt inverse-transform` — recover the gene-family (RBH locus) pairs characteristic of a location in a UMAP embedding. `egt inverse-transform fit` densifies a COO distance matrix, fits a reproducible dense Euclidean UMAP reducer, and persists it (`.reducer`) alongside the ordered feature list (`.features`) and the 2-D embedding (`.embedding.tsv`). `egt inverse-transform query` loads a persisted reducer and inverse-transforms one embedding coordinate (ranked characteristic pairs) or two coordinates (the pairs that most distinguish the two regions). Because UMAP's inverse transform is unsupported for sparse and `metric='precomputed'` reductions, `fit` densifies and uses the Euclidean metric; `--fill-missing {zero,max}` controls how never-observed cells are filled. Includes `tests/test_inverse_transform.py`.
 - `AGENTS.md` documenting the release / publishing process — `bump-my-version bump` → `git push --follow-tags` → `gh release create` → `publish.yml` OIDC upload — plus CHANGELOG conventions, semver guidance, common failure modes, and anti-patterns.
 
 ## [0.2.3] - 2026-05-12
