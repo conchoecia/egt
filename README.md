@@ -20,6 +20,83 @@ data from [`odp`](https://github.com/conchoecia/odp) and provides tools for:
 - Fourier-period analysis of rate time series
 - phylogenetic subsampling, tree prep, taxonomy utilities
 
+## Table of Contents
+
+- [Overview: what egt does and how to read its plots](#overview-what-egt-does-and-how-to-read-its-plots)
+  - [The core idea](#the-core-idea)
+  - [Reading the UMAP plots](#reading-the-umap-plots)
+  - [Where egt fits among comparative-genomics methods](#where-egt-fits-among-comparative-genomics-methods)
+- [Getting Started](#getting-started)
+- [Quick Start](#quick-start)
+  - [PhyloTreeUMAP](#phylotreeumap--manifold-projection-of-per-species-alg-state)
+  - [ALG fusion analysis](#alg-fusion-analysis-on-a-calibrated-tree)
+  - [Perspective-chromosome mapping](#perspective-chromosome-tree-mapping--monte-carlo-rates)
+  - [Rate, Fourier, and branch-stats analyses](#rate-analyses-fourier-periodicity-branch-stats)
+  - [Phylogeny preparation](#phylogeny-preparation)
+- [Users' Guide](#users-guide)
+  - [Installation](#installation)
+  - [Python requirements](#python-requirements)
+  - [Upstream tools](#upstream-tools)
+  - [CLI overview](#cli-overview)
+  - [Snakemake workflows](#snakemake-workflows)
+  - [Input file formats](#input-file-formats)
+- [Layout](#layout)
+- [Related tools](#related-tools)
+- [Citing egt](#citing-egt)
+- [License](#license)
+
+## Overview: what egt does and how to read its plots
+
+### The core idea
+
+egt compares genomes by **where genes sit relative to one another**. For two
+gene families (RBH loci) that both occur on the same chromosome in a genome, it
+records how far apart they are; collected across thousands of locus pairs and
+many genomes, each genome becomes a long vector of pairwise gene-family
+distances. `egt phylotreeumap` projects those high-dimensional vectors into 2D
+with UMAP so the relationships can be inspected visually.
+
+Because the unit of comparison is a single pairwise distance — not an aligned
+block or a fixed gene order — this tolerates rearrangement, missing data, and
+lineage-specific loss: a locus pair contributes wherever both members share a
+chromosome and is ignored elsewhere (missing values are encoded with a
+sentinel).
+
+### Reading the UMAP plots
+
+Every `phylotreeumap` plot is a UMAP embedding:
+
+- **MGT (Multi-Genome Topology)** — each point is a **genome / sample**; genomes
+  with similar genome-wide gene-arrangement patterns land near each other.
+- **MLT (Multi-Locus Topology)** — each point is an **ALG locus / gene family**;
+  loci that keep similar cross-genome distance relationships (e.g. members of the
+  same ALG) cluster together.
+
+As with any UMAP, the absolute axis values and the spacing between clusters are
+not meaningful — only the relative grouping is. To go the other way and ask
+*which gene-family pairs are characteristic of a region* of an embedding, use
+`egt inverse-transform`; to rank the features that distinguish a clade, use
+`egt defining-features`.
+
+### Where egt fits among comparative-genomics methods
+
+Most genome-comparison tools work through **syntenic blocks** (e.g. MCScanX),
+**gene presence/absence and pangenomes**, **rearrangement distances** (e.g.
+DCJ / inversion models), or **whole-genome alignment** — they detect discrete
+collinear blocks or reduce a comparison to a single number. egt is complementary
+and **distance- / embedding-based**: it keeps the full landscape of pairwise
+gene-family distances and projects it, so you can see how genomes or loci cluster
+and how ancestral linkage structure is retained or broken. Reach for egt for an
+exploratory, reference-free overview of arrangement similarity across many
+genomes or loci, plus the downstream rate, fusion, and dispersal analyses — not
+when you need a specific syntenic-block annotation or an exact rearrangement
+count.
+
+Input is reciprocal-best-hits (RBH) data from
+[`odp`](https://github.com/conchoecia/odp) against an ALG database (e.g. the
+metazoan `BCnSSimakov2022` set); the approach generalizes to any clade for which
+an appropriate ortholog / ALG reference is available.
+
 ## Getting Started
 
 ```sh
@@ -110,7 +187,9 @@ pip install -e .
 
 ### Python requirements
 
-Python 3.10 or newer. `pip install -e .` pulls the deps from `pyproject.toml`:
+Python 3.10 or newer; tested on Python 3.10–3.13 across Linux and macOS in
+[CI](https://github.com/conchoecia/egt/actions/workflows/ci.yml). `pip install -e .`
+pulls the deps from `pyproject.toml`:
 
 - numpy, pandas, scipy, scikit-learn, matplotlib, networkx, Pillow
 - umap-learn[plot] — UMAP + the plotting extras needed by PhyloTreeUMAP
