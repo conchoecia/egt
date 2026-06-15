@@ -2261,8 +2261,9 @@ def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
             f'<div class="egt-legend-chip" data-legend-color="{safe_color}" '
             f'role="button" tabindex="0" title="Click to select this color group"'
             'style="display:grid;grid-template-columns:16px 1fr auto 22px;'
-            'align-items:center;column-gap:8px;padding:5px 6px;margin:2px -6px;'
-            f'border-radius:4px;cursor:pointer;font-size:12px;">'
+            'align-items:center;column-gap:8px;padding:5px 6px;margin:2px 0;'
+            f'border-radius:4px;cursor:pointer;font-size:12px;'
+            'break-inside:avoid;-webkit-column-break-inside:avoid;">'
             f'<span style="width:12px;height:12px;border-radius:2px;background:{safe_color};'
             'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>'
             f'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{safe_label}</span>'
@@ -2294,7 +2295,7 @@ def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
         '</div>'
         f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin:4px 0 8px;">'
         f'{html.escape(str(scope_label), quote=True)} · click a group to select it</div>'
-        f"{''.join(items)}"
+        f'<div style="column-count:2;column-gap:14px;">{"".join(items)}</div>'
         f"{omitted_html}"
         "</div>"
     )
@@ -3000,7 +3001,7 @@ def mgt_mlt_plot_HTML(
         sizing_mode="stretch_width",
     )
     legend_div = bokeh.models.Div(
-        text=_color_legend_html(plot_data),
+        text=_color_legend_html(plot_data, max_items=8),
         width=side_panel_width,
         sizing_mode="stretch_width",
     )
@@ -3871,10 +3872,10 @@ def mgt_mlt_plot_HTML(
             source=filtered_source,
             columns=mgt_columns,
             width=side_panel_width,
-            height=max(420, int(plot_height * 0.72)),
+            height=360,
             editable=False,
             selectable=True,
-            sizing_mode="fixed",
+            sizing_mode="stretch_width",
             index_position=None,
         )
         
@@ -4433,24 +4434,20 @@ def mgt_mlt_plot_HTML(
             left_children.insert(0, linked_tree_plot)
         left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
 
-        # Tabs wrap the three readouts so they share vertical space instead
-        # of stacking and pushing the table below the fold.
-        readout_tabs = bokeh.models.Tabs(
-            tabs=[
-                bokeh.models.TabPanel(child=summary_div, title="Summary"),
-                bokeh.models.TabPanel(child=legend_div, title="Legend"),
-                bokeh.models.TabPanel(child=data_table, title="Rows"),
-            ],
-            width=side_panel_width,
-        )
-        _apply_bokeh_widget_theme(widget_stylesheet, readout_tabs)
-
+        # Stacked readouts (the Atlas layout): each readout carries its own
+        # section header, so stacking them in one column reads as three labelled
+        # panels — Exploration Summary, Color Legend, Selected Rows — rather than
+        # hiding two behind tabs. The table sits last with a fixed height so the
+        # sidebar never needs an outer scrollbar.
         right_children = [
             status_div,
             search_section_div,
             taxonomy_row,
             action_row,
-            readout_tabs,
+            summary_div,
+            legend_div,
+            table_section_div,
+            data_table,
         ]
         if tree_action_row is not None:
             right_children.insert(4, tree_action_row)
