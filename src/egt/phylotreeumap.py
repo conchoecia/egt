@@ -4368,6 +4368,11 @@ def mgt_mlt_plot_HTML(
         )
         clear_callback_args.update(tree_callback_args)
         clear_callback_js = r"""
+            // Guard against re-entry: this callback emits plot.reset below, and
+            // it is ALSO wired to the figure's reset event — so without this the
+            // emit would re-trigger the callback forever. The native range reset
+            // still happens regardless of this early return.
+            if (window.__egtResetting) { return; }
             var data = source.data;
             var filtered_data = filtered_source.data;
 """ + tree_sync_js + _taxonomy_summary_js() + r"""
@@ -4402,8 +4407,11 @@ def mgt_mlt_plot_HTML(
                 }
             }
 
-            // Reset zoom/pan and grid visibility.
+            // Reset zoom/pan and grid visibility. Flag-guard the emit so the
+            // reset event it triggers doesn't re-enter this callback (see top).
+            window.__egtResetting = true;
             try { plot.reset.emit(); } catch (e) {}
+            window.__egtResetting = false;
             try {
                 for (var gi = 0; gi < grids.length; gi++) {
                     grids[gi].visible = true;
