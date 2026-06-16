@@ -4368,11 +4368,6 @@ def mgt_mlt_plot_HTML(
         )
         clear_callback_args.update(tree_callback_args)
         clear_callback_js = r"""
-            // Guard against re-entry: this callback emits plot.reset below, and
-            // it is ALSO wired to the figure's reset event — so without this the
-            // emit would re-trigger the callback forever. The native range reset
-            // still happens regardless of this early return.
-            if (window.__egtResetting) { return; }
             var data = source.data;
             var filtered_data = filtered_source.data;
 """ + tree_sync_js + _taxonomy_summary_js() + r"""
@@ -4407,11 +4402,8 @@ def mgt_mlt_plot_HTML(
                 }
             }
 
-            // Reset zoom/pan and grid visibility. Flag-guard the emit so the
-            // reset event it triggers doesn't re-enter this callback (see top).
-            window.__egtResetting = true;
+            // Reset zoom/pan and grid visibility.
             try { plot.reset.emit(); } catch (e) {}
-            window.__egtResetting = false;
             try {
                 for (var gi = 0; gi < grids.length; gi++) {
                     grids[gi].visible = true;
@@ -4429,8 +4421,18 @@ def mgt_mlt_plot_HTML(
         clear_button.js_on_event("button_click", clear_callback)
         # The plot toolbar's Reset tool (and the keyboard reset) should reset the
         # WHOLE viewer — selection, search, sliders, grid — not just the zoom/pan
-        # range. Run the same full clear on the figure's reset event.
-        plot.js_on_event("reset", clear_callback)
+        # range. Reuse the Clear logic, but with the plot.reset.emit() removed:
+        # the Reset tool already performs the native range reset, and re-emitting
+        # it from inside the reset handler re-fires this very event. Bokeh
+        # dispatches that event asynchronously, so a re-entrancy flag can't catch
+        # it — it just loops the page into "Page Unresponsive". Dropping the emit
+        # makes the handler terminal.
+        reset_event_js = clear_callback_js.replace(
+            "try { plot.reset.emit(); } catch (e) {}",
+            "/* native Reset tool already reset the range */",
+        )
+        reset_event_callback = bokeh.models.CustomJS(args=clear_callback_args, code=reset_event_js)
+        plot.js_on_event("reset", reset_event_callback)
 
         layout_kwargs = {}
         row_kwargs = {}
