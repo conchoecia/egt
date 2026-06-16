@@ -3,6 +3,7 @@
 [![CI](https://github.com/conchoecia/egt/actions/workflows/ci.yml/badge.svg)](https://github.com/conchoecia/egt/actions/workflows/ci.yml)
 ![Coverage](images/coverage-badge.svg)
 [![PyPI](https://img.shields.io/pypi/v/egt.svg)](https://pypi.org/project/egt/)
+[![Bioconda](https://img.shields.io/conda/vn/bioconda/egt.svg?label=bioconda)](https://anaconda.org/bioconda/egt)
 [![Python versions](https://img.shields.io/pypi/pyversions/egt.svg)](https://pypi.org/project/egt/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -99,6 +100,21 @@ an appropriate ortholog / ALG reference is available.
 
 ## Getting Started
 
+Install the released package — **bioconda** pulls in every dependency
+(umap-learn, bokeh, ete4, …) as conda packages, so it's the least-friction route:
+
+```sh
+# conda / mamba (recommended — resolves all deps from conda-forge + bioconda)
+mamba install -c conda-forge -c bioconda egt
+
+# or from PyPI
+pip install egt
+
+egt --help
+```
+
+To develop against a local checkout instead:
+
 ```sh
 git clone https://github.com/conchoecia/egt.git
 cd egt
@@ -177,6 +193,15 @@ python -m egt.plot_alg_fusions --help
 ```
 
 ### Installation
+
+Released package (pulls in all dependencies):
+
+```sh
+mamba install -c conda-forge -c bioconda egt   # conda / mamba
+pip install egt                                 # or PyPI
+```
+
+From source, for development:
 
 ```sh
 git clone https://github.com/conchoecia/egt.git
