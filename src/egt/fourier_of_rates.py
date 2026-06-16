@@ -415,7 +415,13 @@ def run_single_analysis(time, values, polynomial, outprefix, spectrum_type, cust
             data_to_plot.append(chunk_to_support[obs_col].values)
             labels.append(f'{period:.1f}\nObs')
     
-    bp = axs[3].boxplot(data_to_plot, labels=labels, patch_artist=True)
+    # NB: set tick labels on the axis rather than via the boxplot keyword.
+    # Matplotlib renamed the keyword from `labels` to `tick_labels` (3.9) and then
+    # removed `labels` (3.10+), so no single keyword works across all supported
+    # matplotlib versions; setting them on the axis afterwards does.
+    bp = axs[3].boxplot(data_to_plot, patch_artist=True)
+    axs[3].set_xticks(range(1, len(labels) + 1))
+    axs[3].set_xticklabels(labels)
     # Color Expected boxes green, Observed boxes blue (alternating pattern)
     for i, box in enumerate(bp['boxes']):
         if i % 2 == 0:  # Even indices are Expected
