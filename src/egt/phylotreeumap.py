@@ -3808,12 +3808,52 @@ def mgt_mlt_plot_HTML(
 
         # Note: filtered_source was already created earlier as an empty ColumnDataSource
 
-        # One unified search field: a numeric query matches taxids, any text
-        # matches the full lineage (see the callback route below). rank_select /
-        # rank_text are kept defined for the callback but are no longer shown.
-        search_taxid = bokeh.models.TextInput(
+        # Autocomplete suggestions for the unified search box: every taxon name
+        # and every taxid that appears anywhere in a lineage. Names winnow the
+        # lineage search; numbers winnow the taxid search — and the callback
+        # checks both the sample and its lineage, so every suggestion is a real,
+        # searchable value.
+        _name_completions, _taxid_completions = set(), set()
+
+        def _collect_completions(column, target, numeric=False):
+            if column not in plot_data.columns:
+                return
+            for cell in plot_data[column].dropna():
+                for part in str(cell).split(";"):
+                    part = part.strip()
+                    if not part or part.lower() == "nan":
+                        continue
+                    if numeric:
+                        try:
+                            part = str(int(float(part)))
+                        except (ValueError, TypeError):
+                            continue
+                    target.add(part)
+
+        _collect_completions("taxname_list_str", _name_completions)
+        _collect_completions("taxname", _name_completions)
+        _collect_completions("taxid_list_str", _taxid_completions, numeric=True)
+        _collect_completions("taxid", _taxid_completions, numeric=True)
+        # Names first (alphabetical), then taxids (shortest/highest-rank first).
+        search_completions = sorted(_name_completions) + sorted(
+            _taxid_completions, key=lambda t: (len(t), t)
+        )
+
+        # One unified search field with type-ahead: a numeric query matches
+        # taxids, any text matches the full lineage (see the callback route).
+        # As you type, the dropdown winnows to matching names/taxids (substring,
+        # case-insensitive); free text is still allowed (restrict=False) so a
+        # partial query that isn't an exact suggestion still searches.
+        # rank_select / rank_text stay defined for the callback but aren't shown.
+        search_taxid = bokeh.models.AutocompleteInput(
             title="Search — taxid number or name",
             placeholder="e.g. 9606   or   Mammalia",
+            completions=search_completions,
+            min_characters=1,
+            case_sensitive=False,
+            search_strategy="includes",
+            restrict=False,
+            max_completions=50,
             sizing_mode="stretch_width",
         )
         rank_select = bokeh.models.Select(
@@ -4490,6 +4530,15 @@ def mgt_mlt_plot_HTML(
             "background-size:16px 16px!important;padding-left:36px!important;border-radius:8px!important;"
             "animation:egtSearchPulse 1.25s ease-in-out 6!important;}"
             "input:focus,.bk-input:focus{animation:none!important;}"
+            # Type-ahead dropdown: scrollable, with readable items and a clear
+            # highlight on the active/hovered suggestion (theme colors).
+            ".bk-menu{max-height:320px!important;overflow-y:auto!important;"
+            "border:1px solid var(--egt-rule)!important;border-radius:8px!important;"
+            "box-shadow:0 8px 24px rgba(0,0,0,.45)!important;padding:4px!important;}"
+            ".bk-menu>*{padding:5px 10px!important;border-radius:5px!important;"
+            "cursor:pointer!important;white-space:nowrap!important;font-size:13px!important;}"
+            ".bk-menu>.bk-active,.bk-menu>*:hover{background:var(--egt-accent-soft)!important;"
+            "color:var(--egt-fg)!important;}"
         )
         search_taxid.stylesheets = list(search_taxid.stylesheets or []) + [_search_box_css]
 
