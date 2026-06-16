@@ -3862,6 +3862,20 @@ def mgt_mlt_plot_HTML(
             bokeh.models.TableColumn(field="taxid", title="Taxid", width=64),
             bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=56, formatter=coordinate_formatter),
             bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=56, formatter=coordinate_formatter),
+            # Dedicated colour column: a filled swatch carrying the clade colour
+            # and its hex, so the row colours read at a glance (the thin Sample
+            # border alone was easy to miss).
+            bokeh.models.TableColumn(
+                field="original_color",
+                title="Color",
+                width=82,
+                formatter=bokeh.models.HTMLTemplateFormatter(template="""
+                    <div style="background:<%= original_color %>;color:#0a0a0a;
+                                font-family:var(--jp-code-font-family, monospace);font-size:11px;
+                                font-weight:600;letter-spacing:.02em;text-align:center;
+                                padding:2px 4px;border-radius:3px;"><%= original_color %></div>
+                """),
+            ),
         ]
         if "color_group_label" in plot_data.columns:
             mgt_columns.insert(1, bokeh.models.TableColumn(field="color_group_label", title="Clade", width=140))
@@ -4468,19 +4482,32 @@ def mgt_mlt_plot_HTML(
             sizing_mode="stretch_width",
         )
 
-        # Left column: search row, then linked tree, UMAP, and the dot controls.
+        # Fit the whole viewer on one screen (e.g. a 14" laptop): drop the
+        # redundant per-plot title and let the UMAP fill the leftover vertical
+        # space instead of running off the bottom. The Atlas page frames the
+        # viewer with its own title, so nothing is lost.
+        plot.title = None
+        plot.sizing_mode = "stretch_both"
+        if linked_tree_plot is not None:
+            linked_tree_plot.sizing_mode = "stretch_width"   # width fills; height stays tree_height
+
+        # Left column: search row (fixed), tree (fixed height), UMAP (fills the
+        # remaining height), then the dot-size/alpha/grid controls. stretch_both
+        # makes the column track the iframe so the UMAP grows/shrinks with the
+        # window rather than overflowing it.
         left_children = [plot, control_row]
         if linked_tree_plot is not None:
             left_children.insert(0, linked_tree_plot)
         left_children.insert(0, search_row)
-        left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
+        left_panel = bokeh.layouts.column(*left_children, sizing_mode="stretch_both")
 
-        # Right column (Atlas layout): just the three stacked readouts — each
-        # carries its own section header. The search controls now live at the top
-        # of the viewer, and the "Active view" scope/% is folded into the summary,
-        # so neither status_div nor search_section_div is shown here (both stay
-        # defined for the callbacks). The table sits last at a fixed height so the
-        # sidebar never needs an outer scrollbar.
+        # Right column (Atlas layout): the three stacked readouts — each carries
+        # its own section header. The search controls now live at the top of the
+        # viewer and the "Active view" scope/% is folded into the summary, so
+        # neither status_div nor search_section_div is shown here (both stay
+        # defined for the callbacks). The column fills the iframe height and
+        # scrolls INTERNALLY when its content is taller than the viewport, so the
+        # page never needs an outer scrollbar on short screens.
         right_children = [
             summary_div,
             legend_div,
@@ -4490,11 +4517,18 @@ def mgt_mlt_plot_HTML(
         right_panel = bokeh.layouts.column(
             *right_children,
             width=side_panel_width,
+            sizing_mode="stretch_height",
+            stylesheets=[
+                ":host{overflow-y:auto;overflow-x:hidden;padding-right:10px;box-sizing:border-box;}"
+            ],
         )
-        body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
+        body_row = bokeh.layouts.row(
+            left_panel, bokeh.models.Spacer(width=16), right_panel,
+            sizing_mode="stretch_both",
+        )
         # No header bar: the search row is the top element (the Atlas page frames
         # the viewer with its own title/branding).
-        layout = bokeh.layouts.column(body_row, sizing_mode="stretch_width")
+        layout = bokeh.layouts.column(body_row, sizing_mode="stretch_both")
 
     # Store the IDs for later reference in auto-init script
     source_id = source.id if filtered_source is not None else None
