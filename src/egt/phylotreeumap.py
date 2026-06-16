@@ -1708,7 +1708,9 @@ _UI_THEMES = {
     "evogeno_dark": {
         "bg": "#0a0a0a",
         "bg_soft": "#111114",
-        "bg_raised": "#111114",
+        # Slightly lighter than bg_soft so alternating table rows (odd rows use
+        # bg_raised, even rows bg_soft) read as stripes, matching the paper theme.
+        "bg_raised": "#191a20",
         "border": "#1f2329",
         "border_soft": "#1f2329",
         "fg": "#f2f2ea",
@@ -2045,7 +2047,7 @@ def _taxonomy_summary_default_html(plot_data, analysis_type):
         f'<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
         f'text-transform:uppercase;color:{_UI_FG_MUTED};">Exploration summary</span>'
         f'<span style="font-family:{_UI_FONT_MONO};font-size:12px;color:{_UI_FG};">'
-        f'n = <strong>{total}</strong></span>'
+        f'n = <strong>{total}</strong> of {total} total (100.0%)</span>'
         '</div>'
         '<dl style="margin:10px 0 0;padding:0;">'
         f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
@@ -2125,8 +2127,8 @@ def _panel_section_html(title, subtitle=""):
     return (
         f'<div style="box-sizing:border-box;width:100%;padding:12px 0 6px;'
         f'font-family:{_UI_FONT_SANS};color:{_UI_FG};border-bottom:1px solid {_UI_BORDER_SOFT};">'
-        f'<div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;'
-        f'text-transform:uppercase;color:{_UI_FG};">{html.escape(str(title), quote=True)}</div>'
+        f'<div style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">{html.escape(str(title), quote=True)}</div>'
         f"{subtitle_html}"
         "</div>"
     )
@@ -2261,8 +2263,9 @@ def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
             f'<div class="egt-legend-chip" data-legend-color="{safe_color}" '
             f'role="button" tabindex="0" title="Click to select this color group"'
             'style="display:grid;grid-template-columns:16px 1fr auto 22px;'
-            'align-items:center;column-gap:8px;padding:5px 6px;margin:2px -6px;'
-            f'border-radius:4px;cursor:pointer;font-size:12px;">'
+            'align-items:center;column-gap:8px;padding:2px 6px;margin:1px 0;line-height:1.2;'
+            f'border-radius:4px;cursor:pointer;font-size:12px;'
+            'break-inside:avoid;-webkit-column-break-inside:avoid;">'
             f'<span style="width:12px;height:12px;border-radius:2px;background:{safe_color};'
             'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>'
             f'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{safe_label}</span>'
@@ -2294,7 +2297,7 @@ def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
         '</div>'
         f'<div style="font-size:11px;color:{_UI_FG_MUTED};margin:4px 0 8px;">'
         f'{html.escape(str(scope_label), quote=True)} · click a group to select it</div>'
-        f"{''.join(items)}"
+        f'<div style="column-count:2;column-gap:14px;">{"".join(items)}</div>'
         f"{omitted_html}"
         "</div>"
     )
@@ -2459,7 +2462,7 @@ def _taxonomy_summary_js():
                     return String(a[0]).localeCompare(String(b[0]));
                 });
 
-                var maxItems = 28;
+                var maxItems = 8;
                 var visible = rows.slice(0, maxItems);
                 var omitted = Math.max(0, rows.length - visible.length);
                 var items = '';
@@ -2472,8 +2475,8 @@ def _taxonomy_summary_js():
                         '<div class="egt-legend-chip" data-legend-color="' + escapeHtml(color) + '"' +
                         ' role="button" tabindex="0" title="Click to select this color group"' +
                         ' style="display:grid;grid-template-columns:16px 1fr auto 22px;align-items:center;' +
-                        'column-gap:8px;padding:5px 6px;margin:2px -6px;border-radius:4px;cursor:pointer;' +
-                        'font-size:12px;">' +
+                        'column-gap:8px;padding:2px 6px;margin:1px 0;line-height:1.2;border-radius:4px;cursor:pointer;' +
+                        'font-size:12px;break-inside:avoid;-webkit-column-break-inside:avoid;">' +
                         '<span style="width:12px;height:12px;border-radius:2px;background:' + escapeHtml(color) + ';' +
                         'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>' +
                         '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
@@ -2504,7 +2507,7 @@ def _taxonomy_summary_js():
                     '</div>' +
                     '<div style="font-size:11px;color:' + T.fgMuted + ';margin:4px 0 8px;">' +
                     escapeHtml(scope || 'Active view') + ' · click a group to select it</div>' +
-                    items +
+                    '<div style="column-count:2;column-gap:14px;">' + items + '</div>' +
                     omittedHtml +
                     '</div>';
             }
@@ -2600,7 +2603,7 @@ def _taxonomy_summary_js():
                         '<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;' +
                         'text-transform:uppercase;color:' + T.fgMuted + ';">Exploration summary</span>' +
                         '<span style="font-family:' + T.fontMono + ';font-size:12px;color:' + T.fg + ';">' +
-                        'n = <strong>' + total + '</strong></span>' +
+                        'n = <strong>' + total + '</strong> of ' + allCount + ' total (' + pctShown.toFixed(1) + '%)</span>' +
                         '</div>' +
                         '<dl style="margin:10px 0 0;padding:0;">' +
                         '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
@@ -3000,7 +3003,7 @@ def mgt_mlt_plot_HTML(
         sizing_mode="stretch_width",
     )
     legend_div = bokeh.models.Div(
-        text=_color_legend_html(plot_data),
+        text=_color_legend_html(plot_data, max_items=8),
         width=side_panel_width,
         sizing_mode="stretch_width",
     )
@@ -3805,10 +3808,13 @@ def mgt_mlt_plot_HTML(
 
         # Note: filtered_source was already created earlier as an empty ColumnDataSource
 
+        # One unified search field: a numeric query matches taxids, any text
+        # matches the full lineage (see the callback route below). rank_select /
+        # rank_text are kept defined for the callback but are no longer shown.
         search_taxid = bokeh.models.TextInput(
-            title="Highlight taxid(s):",
-            placeholder="e.g. 9606 or 9606, 7227",
-            width=side_input_width,
+            title="Search — taxid number or name",
+            placeholder="e.g. 9606   or   Mammalia",
+            sizing_mode="stretch_width",
         )
         rank_select = bokeh.models.Select(
             title="Taxonomic rank:",
@@ -3823,7 +3829,7 @@ def mgt_mlt_plot_HTML(
             disabled=not has_rank_options,
             width=side_input_width,
         )
-        update_button = bokeh.models.Button(label="Apply search", button_type="success", width=side_button_width)
+        update_button = bokeh.models.Button(label="Update Plot", button_type="success", width=side_button_width)
 
         export_button = bokeh.models.Button(label="Export", button_type="success", width=side_button_width)
         # Single "Clear" that resets everything: selection, search inputs,
@@ -3858,6 +3864,25 @@ def mgt_mlt_plot_HTML(
             bokeh.models.TableColumn(field="taxid", title="Taxid", width=64),
             bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=56, formatter=coordinate_formatter),
             bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=56, formatter=coordinate_formatter),
+            # Dedicated colour column: a filled swatch carrying the clade colour
+            # and its hex, so the row colours read at a glance (the thin Sample
+            # border alone was easy to miss).
+            bokeh.models.TableColumn(
+                field="original_color",
+                title="Color",
+                width=82,
+                formatter=bokeh.models.HTMLTemplateFormatter(template="""
+                    <% var _c = (original_color || '').toString();
+                       var _h = _c.charAt(0) === '#' ? _c.substring(1) : _c;
+                       var _r = parseInt(_h.substr(0,2),16), _g = parseInt(_h.substr(2,2),16), _b = parseInt(_h.substr(4,2),16);
+                       var _lum = (isNaN(_r)||isNaN(_g)||isNaN(_b)) ? 200 : (0.299*_r + 0.587*_g + 0.114*_b);
+                       var _tc = _lum > 145 ? '#0a0a0a' : '#f4f4ee'; %>
+                    <div style="background:<%= _c %> !important;color:<%= _tc %> !important;
+                                font-family:var(--jp-code-font-family, monospace);font-size:11px;
+                                font-weight:600;letter-spacing:.02em;text-align:center;
+                                padding:2px 4px;border-radius:3px;"><%= _c %></div>
+                """),
+            ),
         ]
         if "color_group_label" in plot_data.columns:
             mgt_columns.insert(1, bokeh.models.TableColumn(field="color_group_label", title="Clade", width=140))
@@ -3871,10 +3896,10 @@ def mgt_mlt_plot_HTML(
             source=filtered_source,
             columns=mgt_columns,
             width=side_panel_width,
-            height=max(420, int(plot_height * 0.72)),
+            height=360,
             editable=False,
             selectable=True,
-            sizing_mode="fixed",
+            sizing_mode="stretch_width",
             index_position=None,
         )
         
@@ -3984,6 +4009,16 @@ def mgt_mlt_plot_HTML(
             var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
             var rank_field = rank_select.value;
             var rank_input = rank_text.value.trim().toLowerCase();
+
+            // Unified search box routing: a purely numeric query (taxids, comma/
+            // space separated) keeps the taxid match; anything containing letters
+            // is treated as a full-lineage (taxname) substring search instead.
+            var __searchNumeric = /^[\s,;\d]+$/.test(taxid_raw);
+            if (taxid_raw !== "" && !__searchNumeric) {
+                taxid_terms = [];
+                rank_field = "taxname_list_str";
+                rank_input = taxid_raw.toLowerCase();
+            }
 
             var slider_size = Math.max(size_slider.value, 1);
             var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
@@ -4384,6 +4419,20 @@ def mgt_mlt_plot_HTML(
         """
         clear_callback = bokeh.models.CustomJS(args=clear_callback_args, code=clear_callback_js)
         clear_button.js_on_event("button_click", clear_callback)
+        # The plot toolbar's Reset tool (and the keyboard reset) should reset the
+        # WHOLE viewer — selection, search, sliders, grid — not just the zoom/pan
+        # range. Reuse the Clear logic, but with the plot.reset.emit() removed:
+        # the Reset tool already performs the native range reset, and re-emitting
+        # it from inside the reset handler re-fires this very event. Bokeh
+        # dispatches that event asynchronously, so a re-entrancy flag can't catch
+        # it — it just loops the page into "Page Unresponsive". Dropping the emit
+        # makes the handler terminal.
+        reset_event_js = clear_callback_js.replace(
+            "try { plot.reset.emit(); } catch (e) {}",
+            "/* native Reset tool already reset the range */",
+        )
+        reset_event_callback = bokeh.models.CustomJS(args=clear_callback_args, code=reset_event_js)
+        plot.js_on_event("reset", reset_event_callback)
 
         layout_kwargs = {}
         row_kwargs = {}
@@ -4418,49 +4467,89 @@ def mgt_mlt_plot_HTML(
             data_table,
         )
 
-        control_row = bokeh.layouts.row(size_slider, alpha_slider, **row_kwargs)
-        grid_row = bokeh.layouts.row(grid_toggle, **row_kwargs)
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
-        action_row = bokeh.layouts.row(update_button, clear_button, export_button, align="start", **row_kwargs)
-        tree_action_row = (
-            bokeh.layouts.row(tree_toggle, align="start", **row_kwargs)
-            if tree_toggle is not None
-            else None
+        # Dot-size / alpha / grid controls sit in one row under the UMAP.
+        control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
+
+        # Make the unified field read as a search box: inline label (left of the
+        # field rather than above), a magnifier icon, and a finite attention pulse
+        # on load that stops on focus. Colors come from the active theme's CSS
+        # custom properties, so this works for both paper and evogeno_dark.
+        _mag_stroke = "%23" + _UI_FG_MUTED.lstrip("#")
+        _search_box_css = (
+            "@keyframes egtSearchPulse{0%,100%{box-shadow:0 0 0 0 rgba(127,224,200,0);}"
+            "50%{box-shadow:0 0 0 5px var(--egt-accent-soft);}}"
+            ".bk-input-group{flex-direction:row!important;align-items:center!important;gap:10px!important;}"
+            ".bk-input-group>label,.bk-input-group label{white-space:nowrap!important;"
+            "color:var(--egt-muted)!important;margin:0 0 0 2px!important;font-weight:400!important;"
+            "font-size:13px!important;}"
+            "input,.bk-input{background-image:url(\"data:image/svg+xml,"
+            "%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' "
+            "stroke='" + _mag_stroke + "' stroke-width='2' stroke-linecap='round'%3E"
+            "%3Ccircle cx='7' cy='7' r='5'/%3E%3Cline x1='11' y1='11' x2='15' y2='15'/%3E%3C/svg%3E\")"
+            "!important;background-repeat:no-repeat!important;background-position:12px center!important;"
+            "background-size:16px 16px!important;padding-left:36px!important;border-radius:8px!important;"
+            "animation:egtSearchPulse 1.25s ease-in-out 6!important;}"
+            "input:focus,.bk-input:focus{animation:none!important;}"
+        )
+        search_taxid.stylesheets = list(search_taxid.stylesheets or []) + [_search_box_css]
+
+        # The unified search box + action buttons form a single row that sits
+        # ABOVE the tree and UMAP (not in the sidebar). Buttons are bottom-aligned
+        # with the input field so their right edges line up with the box.
+        for _action_btn in (update_button, clear_button, export_button):
+            _action_btn.align = "end"
+        search_row = bokeh.layouts.row(
+            search_taxid, update_button, clear_button, export_button,
+            sizing_mode="stretch_width",
         )
 
-        left_children = [plot, control_row, grid_row]
+        # Fit the whole viewer on one screen (e.g. a 14" laptop): drop the
+        # redundant per-plot title and let the UMAP fill the leftover vertical
+        # space instead of running off the bottom. The Atlas page frames the
+        # viewer with its own title, so nothing is lost.
+        plot.title = None
+        plot.sizing_mode = "stretch_both"
+        if linked_tree_plot is not None:
+            linked_tree_plot.sizing_mode = "stretch_width"   # width fills; height stays tree_height
+
+        # Left column: search row (fixed), tree (fixed height), UMAP (fills the
+        # remaining height), then the dot-size/alpha/grid controls. stretch_both
+        # makes the column track the iframe so the UMAP grows/shrinks with the
+        # window rather than overflowing it.
+        left_children = [plot, control_row]
         if linked_tree_plot is not None:
             left_children.insert(0, linked_tree_plot)
-        left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
+        left_children.insert(0, search_row)
+        left_panel = bokeh.layouts.column(*left_children, sizing_mode="stretch_both")
 
-        # Tabs wrap the three readouts so they share vertical space instead
-        # of stacking and pushing the table below the fold.
-        readout_tabs = bokeh.models.Tabs(
-            tabs=[
-                bokeh.models.TabPanel(child=summary_div, title="Summary"),
-                bokeh.models.TabPanel(child=legend_div, title="Legend"),
-                bokeh.models.TabPanel(child=data_table, title="Rows"),
-            ],
-            width=side_panel_width,
-        )
-        _apply_bokeh_widget_theme(widget_stylesheet, readout_tabs)
-
+        # Right column (Atlas layout): the three stacked readouts — each carries
+        # its own section header. The search controls now live at the top of the
+        # viewer and the "Active view" scope/% is folded into the summary, so
+        # neither status_div nor search_section_div is shown here (both stay
+        # defined for the callbacks). The column fills the iframe height and
+        # scrolls INTERNALLY when its content is taller than the viewport, so the
+        # page never needs an outer scrollbar on short screens.
         right_children = [
-            status_div,
-            search_section_div,
-            taxonomy_row,
-            action_row,
-            readout_tabs,
+            summary_div,
+            legend_div,
+            table_section_div,
+            data_table,
         ]
-        if tree_action_row is not None:
-            right_children.insert(4, tree_action_row)
-
         right_panel = bokeh.layouts.column(
             *right_children,
             width=side_panel_width,
+            sizing_mode="stretch_height",
+            stylesheets=[
+                ":host{overflow-y:auto;overflow-x:hidden;padding-right:10px;box-sizing:border-box;}"
+            ],
         )
-        body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
-        layout = bokeh.layouts.column(header_div, body_row, sizing_mode="stretch_width")
+        body_row = bokeh.layouts.row(
+            left_panel, bokeh.models.Spacer(width=16), right_panel,
+            sizing_mode="stretch_both",
+        )
+        # No header bar: the search row is the top element (the Atlas page frames
+        # the viewer with its own title/branding).
+        layout = bokeh.layouts.column(body_row, sizing_mode="stretch_both")
 
     # Store the IDs for later reference in auto-init script
     source_id = source.id if filtered_source is not None else None
