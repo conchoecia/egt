@@ -2125,8 +2125,8 @@ def _panel_section_html(title, subtitle=""):
     return (
         f'<div style="box-sizing:border-box;width:100%;padding:12px 0 6px;'
         f'font-family:{_UI_FONT_SANS};color:{_UI_FG};border-bottom:1px solid {_UI_BORDER_SOFT};">'
-        f'<div style="font-size:10.5px;font-weight:700;letter-spacing:.12em;'
-        f'text-transform:uppercase;color:{_UI_FG};">{html.escape(str(title), quote=True)}</div>'
+        f'<div style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
+        f'text-transform:uppercase;color:{_UI_FG_MUTED};">{html.escape(str(title), quote=True)}</div>'
         f"{subtitle_html}"
         "</div>"
     )
@@ -2460,7 +2460,7 @@ def _taxonomy_summary_js():
                     return String(a[0]).localeCompare(String(b[0]));
                 });
 
-                var maxItems = 28;
+                var maxItems = 8;
                 var visible = rows.slice(0, maxItems);
                 var omitted = Math.max(0, rows.length - visible.length);
                 var items = '';
@@ -2473,8 +2473,8 @@ def _taxonomy_summary_js():
                         '<div class="egt-legend-chip" data-legend-color="' + escapeHtml(color) + '"' +
                         ' role="button" tabindex="0" title="Click to select this color group"' +
                         ' style="display:grid;grid-template-columns:16px 1fr auto 22px;align-items:center;' +
-                        'column-gap:8px;padding:5px 6px;margin:2px -6px;border-radius:4px;cursor:pointer;' +
-                        'font-size:12px;">' +
+                        'column-gap:8px;padding:5px 6px;margin:2px 0;border-radius:4px;cursor:pointer;' +
+                        'font-size:12px;break-inside:avoid;-webkit-column-break-inside:avoid;">' +
                         '<span style="width:12px;height:12px;border-radius:2px;background:' + escapeHtml(color) + ';' +
                         'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>' +
                         '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(label) + '</span>' +
@@ -2505,7 +2505,7 @@ def _taxonomy_summary_js():
                     '</div>' +
                     '<div style="font-size:11px;color:' + T.fgMuted + ';margin:4px 0 8px;">' +
                     escapeHtml(scope || 'Active view') + ' · click a group to select it</div>' +
-                    items +
+                    '<div style="column-count:2;column-gap:14px;">' + items + '</div>' +
                     omittedHtml +
                     '</div>';
             }
