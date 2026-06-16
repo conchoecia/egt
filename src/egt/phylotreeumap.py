@@ -1708,7 +1708,9 @@ _UI_THEMES = {
     "evogeno_dark": {
         "bg": "#0a0a0a",
         "bg_soft": "#111114",
-        "bg_raised": "#111114",
+        # Slightly lighter than bg_soft so alternating table rows (odd rows use
+        # bg_raised, even rows bg_soft) read as stripes, matching the paper theme.
+        "bg_raised": "#191a20",
         "border": "#1f2329",
         "border_soft": "#1f2329",
         "fg": "#f2f2ea",
@@ -2045,7 +2047,7 @@ def _taxonomy_summary_default_html(plot_data, analysis_type):
         f'<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;'
         f'text-transform:uppercase;color:{_UI_FG_MUTED};">Exploration summary</span>'
         f'<span style="font-family:{_UI_FONT_MONO};font-size:12px;color:{_UI_FG};">'
-        f'n = <strong>{total}</strong></span>'
+        f'n = <strong>{total}</strong> of {total} total (100.0%)</span>'
         '</div>'
         '<dl style="margin:10px 0 0;padding:0;">'
         f'<dt style="color:{_UI_FG_MUTED};font-size:10.5px;letter-spacing:.08em;'
@@ -2261,7 +2263,7 @@ def _color_legend_html(plot_data, max_items=28, scope_label="All points"):
             f'<div class="egt-legend-chip" data-legend-color="{safe_color}" '
             f'role="button" tabindex="0" title="Click to select this color group"'
             'style="display:grid;grid-template-columns:16px 1fr auto 22px;'
-            'align-items:center;column-gap:8px;padding:5px 6px;margin:2px 0;'
+            'align-items:center;column-gap:8px;padding:2px 6px;margin:1px 0;line-height:1.2;'
             f'border-radius:4px;cursor:pointer;font-size:12px;'
             'break-inside:avoid;-webkit-column-break-inside:avoid;">'
             f'<span style="width:12px;height:12px;border-radius:2px;background:{safe_color};'
@@ -2473,7 +2475,7 @@ def _taxonomy_summary_js():
                         '<div class="egt-legend-chip" data-legend-color="' + escapeHtml(color) + '"' +
                         ' role="button" tabindex="0" title="Click to select this color group"' +
                         ' style="display:grid;grid-template-columns:16px 1fr auto 22px;align-items:center;' +
-                        'column-gap:8px;padding:5px 6px;margin:2px 0;border-radius:4px;cursor:pointer;' +
+                        'column-gap:8px;padding:2px 6px;margin:1px 0;line-height:1.2;border-radius:4px;cursor:pointer;' +
                         'font-size:12px;break-inside:avoid;-webkit-column-break-inside:avoid;">' +
                         '<span style="width:12px;height:12px;border-radius:2px;background:' + escapeHtml(color) + ';' +
                         'border:1px solid rgba(0,0,0,.22);display:inline-block;"></span>' +
@@ -2601,7 +2603,7 @@ def _taxonomy_summary_js():
                         '<span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;' +
                         'text-transform:uppercase;color:' + T.fgMuted + ';">Exploration summary</span>' +
                         '<span style="font-family:' + T.fontMono + ';font-size:12px;color:' + T.fg + ';">' +
-                        'n = <strong>' + total + '</strong></span>' +
+                        'n = <strong>' + total + '</strong> of ' + allCount + ' total (' + pctShown.toFixed(1) + '%)</span>' +
                         '</div>' +
                         '<dl style="margin:10px 0 0;padding:0;">' +
                         '<dt style="color:' + T.fgMuted + ';font-size:10.5px;letter-spacing:.08em;' +
@@ -3870,10 +3872,15 @@ def mgt_mlt_plot_HTML(
                 title="Color",
                 width=82,
                 formatter=bokeh.models.HTMLTemplateFormatter(template="""
-                    <div style="background:<%= original_color %>;color:#0a0a0a;
+                    <% var _c = (original_color || '').toString();
+                       var _h = _c.charAt(0) === '#' ? _c.substring(1) : _c;
+                       var _r = parseInt(_h.substr(0,2),16), _g = parseInt(_h.substr(2,2),16), _b = parseInt(_h.substr(4,2),16);
+                       var _lum = (isNaN(_r)||isNaN(_g)||isNaN(_b)) ? 200 : (0.299*_r + 0.587*_g + 0.114*_b);
+                       var _tc = _lum > 145 ? '#0a0a0a' : '#f4f4ee'; %>
+                    <div style="background:<%= _c %> !important;color:<%= _tc %> !important;
                                 font-family:var(--jp-code-font-family, monospace);font-size:11px;
                                 font-weight:600;letter-spacing:.02em;text-align:center;
-                                padding:2px 4px;border-radius:3px;"><%= original_color %></div>
+                                padding:2px 4px;border-radius:3px;"><%= _c %></div>
                 """),
             ),
         ]
@@ -4412,6 +4419,10 @@ def mgt_mlt_plot_HTML(
         """
         clear_callback = bokeh.models.CustomJS(args=clear_callback_args, code=clear_callback_js)
         clear_button.js_on_event("button_click", clear_callback)
+        # The plot toolbar's Reset tool (and the keyboard reset) should reset the
+        # WHOLE viewer — selection, search, sliders, grid — not just the zoom/pan
+        # range. Run the same full clear on the figure's reset event.
+        plot.js_on_event("reset", clear_callback)
 
         layout_kwargs = {}
         row_kwargs = {}
