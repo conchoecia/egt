@@ -3806,10 +3806,13 @@ def mgt_mlt_plot_HTML(
 
         # Note: filtered_source was already created earlier as an empty ColumnDataSource
 
+        # One unified search field: a numeric query matches taxids, any text
+        # matches the full lineage (see the callback route below). rank_select /
+        # rank_text are kept defined for the callback but are no longer shown.
         search_taxid = bokeh.models.TextInput(
-            title="Highlight taxid(s):",
-            placeholder="e.g. 9606 or 9606, 7227",
-            width=side_input_width,
+            title="Search — taxid number or name",
+            placeholder="e.g. 9606   or   Mammalia",
+            sizing_mode="stretch_width",
         )
         rank_select = bokeh.models.Select(
             title="Taxonomic rank:",
@@ -3824,7 +3827,7 @@ def mgt_mlt_plot_HTML(
             disabled=not has_rank_options,
             width=side_input_width,
         )
-        update_button = bokeh.models.Button(label="Apply search", button_type="success", width=side_button_width)
+        update_button = bokeh.models.Button(label="Update Plot", button_type="success", width=side_button_width)
 
         export_button = bokeh.models.Button(label="Export", button_type="success", width=side_button_width)
         # Single "Clear" that resets everything: selection, search inputs,
@@ -3985,6 +3988,16 @@ def mgt_mlt_plot_HTML(
             var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
             var rank_field = rank_select.value;
             var rank_input = rank_text.value.trim().toLowerCase();
+
+            // Unified search box routing: a purely numeric query (taxids, comma/
+            // space separated) keeps the taxid match; anything containing letters
+            // is treated as a full-lineage (taxname) substring search instead.
+            var __searchNumeric = /^[\s,;\d]+$/.test(taxid_raw);
+            if (taxid_raw !== "" && !__searchNumeric) {
+                taxid_terms = [];
+                rank_field = "taxname_list_str";
+                rank_input = taxid_raw.toLowerCase();
+            }
 
             var slider_size = Math.max(size_slider.value, 1);
             var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
@@ -4419,45 +4432,69 @@ def mgt_mlt_plot_HTML(
             data_table,
         )
 
-        control_row = bokeh.layouts.row(size_slider, alpha_slider, **row_kwargs)
-        grid_row = bokeh.layouts.row(grid_toggle, **row_kwargs)
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
-        action_row = bokeh.layouts.row(update_button, clear_button, export_button, align="start", **row_kwargs)
-        tree_action_row = (
-            bokeh.layouts.row(tree_toggle, align="start", **row_kwargs)
-            if tree_toggle is not None
-            else None
+        # Dot-size / alpha / grid controls sit in one row under the UMAP.
+        control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
+
+        # Make the unified field read as a search box: inline label (left of the
+        # field rather than above), a magnifier icon, and a finite attention pulse
+        # on load that stops on focus. Colors come from the active theme's CSS
+        # custom properties, so this works for both paper and evogeno_dark.
+        _mag_stroke = "%23" + _UI_FG_MUTED.lstrip("#")
+        _search_box_css = (
+            "@keyframes egtSearchPulse{0%,100%{box-shadow:0 0 0 0 rgba(127,224,200,0);}"
+            "50%{box-shadow:0 0 0 5px var(--egt-accent-soft);}}"
+            ".bk-input-group{flex-direction:row!important;align-items:center!important;gap:10px!important;}"
+            ".bk-input-group>label,.bk-input-group label{white-space:nowrap!important;"
+            "color:var(--egt-muted)!important;margin:0 0 0 2px!important;font-weight:400!important;"
+            "font-size:13px!important;}"
+            "input,.bk-input{background-image:url(\"data:image/svg+xml,"
+            "%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' "
+            "stroke='" + _mag_stroke + "' stroke-width='2' stroke-linecap='round'%3E"
+            "%3Ccircle cx='7' cy='7' r='5'/%3E%3Cline x1='11' y1='11' x2='15' y2='15'/%3E%3C/svg%3E\")"
+            "!important;background-repeat:no-repeat!important;background-position:12px center!important;"
+            "background-size:16px 16px!important;padding-left:36px!important;border-radius:8px!important;"
+            "animation:egtSearchPulse 1.25s ease-in-out 6!important;}"
+            "input:focus,.bk-input:focus{animation:none!important;}"
+        )
+        search_taxid.stylesheets = list(search_taxid.stylesheets or []) + [_search_box_css]
+
+        # The unified search box + action buttons form a single row that sits
+        # ABOVE the tree and UMAP (not in the sidebar). Buttons are bottom-aligned
+        # with the input field so their right edges line up with the box.
+        for _action_btn in (update_button, clear_button, export_button):
+            _action_btn.align = "end"
+        search_row = bokeh.layouts.row(
+            search_taxid, update_button, clear_button, export_button,
+            sizing_mode="stretch_width",
         )
 
-        left_children = [plot, control_row, grid_row]
+        # Left column: search row, then linked tree, UMAP, and the dot controls.
+        left_children = [plot, control_row]
         if linked_tree_plot is not None:
             left_children.insert(0, linked_tree_plot)
+        left_children.insert(0, search_row)
         left_panel = bokeh.layouts.column(*left_children, **layout_kwargs)
 
-        # Stacked readouts (the Atlas layout): each readout carries its own
-        # section header, so stacking them in one column reads as three labelled
-        # panels — Exploration Summary, Color Legend, Selected Rows — rather than
-        # hiding two behind tabs. The table sits last with a fixed height so the
+        # Right column (Atlas layout): just the three stacked readouts — each
+        # carries its own section header. The search controls now live at the top
+        # of the viewer, and the "Active view" scope/% is folded into the summary,
+        # so neither status_div nor search_section_div is shown here (both stay
+        # defined for the callbacks). The table sits last at a fixed height so the
         # sidebar never needs an outer scrollbar.
         right_children = [
-            status_div,
-            search_section_div,
-            taxonomy_row,
-            action_row,
             summary_div,
             legend_div,
             table_section_div,
             data_table,
         ]
-        if tree_action_row is not None:
-            right_children.insert(4, tree_action_row)
-
         right_panel = bokeh.layouts.column(
             *right_children,
             width=side_panel_width,
         )
         body_row = bokeh.layouts.row(left_panel, bokeh.models.Spacer(width=16), right_panel, sizing_mode="stretch_width")
-        layout = bokeh.layouts.column(header_div, body_row, sizing_mode="stretch_width")
+        # No header bar: the search row is the top element (the Atlas page frames
+        # the viewer with its own title/branding).
+        layout = bokeh.layouts.column(body_row, sizing_mode="stretch_width")
 
     # Store the IDs for later reference in auto-init script
     source_id = source.id if filtered_source is not None else None
