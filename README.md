@@ -338,11 +338,12 @@ egt/
 
 ## Citing egt
 
-If you use this toolkit, please cite:
+If you use `egt` in your work, please cite:
 
-> Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., Simakov, O. (2024).
+> Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., Simakov, O. (2026).
 > *Topological mixing and irreversibility in animal chromosome evolution.*
-> bioRxiv. [doi:10.1101/2024.07.29.605683](https://doi.org/10.1101/2024.07.29.605683)
+> Science Advances **12**(34), eadz5561.
+> [doi:10.1126/sciadv.adz5561](https://doi.org/10.1126/sciadv.adz5561)
 
 For background on the topological framework for comparative genomics, see:
 
