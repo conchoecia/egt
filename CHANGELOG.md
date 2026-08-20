@@ -8,6 +8,8 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-19
+
 ### Changed
 - Citation updated from the bioRxiv preprint to the published paper: Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., & Simakov, O. (2026). Topological mixing and irreversibility in animal chromosome evolution. *Science Advances*, **12**(34), eadz5561, doi:10.1126/sciadv.adz5561. Affects `README.md` and `CITATION.cff`.
 - `CITATION.cff` — `version` was pinned at a stale `0.1.0`; it now tracks the real package version and is registered in `[tool.bumpversion.files]` so future bumps keep it in lockstep.
