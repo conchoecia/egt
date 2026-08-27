@@ -60,6 +60,10 @@ dev = [
   "openpyxl",
   "upsetplot",
   "goatools",
+  # goatools (<=1.6.5) lazily imports statsmodels.sandbox.stats.multicomp.
+  # multipletests, which statsmodels 0.15.0 removed — pin until goatools
+  # migrates to statsmodels.stats.multitest.
+  "statsmodels<0.15",
   # Version bumping (bump-my-version reads [tool.bumpversion] below).
   "bump-my-version",
 ]
