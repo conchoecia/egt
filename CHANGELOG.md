@@ -8,6 +8,9 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+### Internal
+- CI: pin `statsmodels<0.15` in the `dev` extra. statsmodels 0.15.0 (released after the last green main run) removed the deprecated `statsmodels.sandbox.stats.multicomp.multipletests` alias that goatools (through 1.6.5) still imports lazily, which broke `tests/test_go_benchmark_goatools_ref.py` on every fresh install. Drop the pin once goatools migrates to `statsmodels.stats.multitest`.
+
 ## [0.2.5] - 2026-08-19
 
 ### Changed
