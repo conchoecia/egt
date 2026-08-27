@@ -8,6 +8,13 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+### Added
+- `egt phylotreeumap mlt-matrix` — new subcommand exposing `topoumap_genmatrix()`: averages the genome-by-locus-pair distance matrix (from `combine-distances`) into the MLT locus-by-locus matrix that `mgt-mlt-umap` consumes in MLT mode. Previously this stage was only reachable through the Snakemake workflows, so the MLT arm of the pipeline could not be run stage-by-stage from the CLI.
+
+### Fixed
+- `egt phylotreeumap mgt-mlt-umap` — MLT mode crashed with `ValueError: too many values to unpack (expected 2)` because the `--locus-file` was always parsed as the two-column MGT alg_combo_to_ix file, even when it was the multi-column ALG RBH file that MLT mode documents. The locus-file format is now auto-detected from the number of tab-separated columns; in MLT mode the distance matrix is validated against the RBH loci (square, one row per locus) and the UMAP coordinates are attached to the RBH metadata instead of the sample dataframe. The `odolGenUMAP` Snakemake rule hit the same crash.
+- `egt phylotreeumap mgt-mlt-umap` — `--nan-mode small|large` (the only values the CLI accepts) crashed with `ValueError: invalid literal for int() with base 10: 'small'` before the UMAP was ever computed. `"small"` and `"large"` now map to `0` and `--missing-value-as` respectively; numeric strings keep working.
+
 ## [0.2.5] - 2026-08-19
 
 ### Changed
