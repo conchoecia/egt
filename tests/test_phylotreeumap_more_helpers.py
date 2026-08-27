@@ -430,8 +430,58 @@ def test_topoumap_genmatrix_validation_and_outputs(monkeypatch, tmp_path: Path):
     assert load_npz(phylo_out).toarray()[0, 1] > 0
 
 
+def test_topoumap_mean_filters_coo_rows_by_position_not_dataframe_label(monkeypatch, tmp_path: Path):
+    """A non-RangeIndex must not make excluded genomes leak into the mean."""
+    sampledf = tmp_path / "sampledf.tsv"
+    pd.DataFrame(
+        {
+            "sample": ["kept_a", "excluded", "kept_b"],
+            "taxid_list": ["[1, 10]", "[1, 20]", "[1, 10]"],
+        },
+        index=[10, 20, 30],
+    ).to_csv(sampledf, sep="\t")
+
+    combo = tmp_path / "combo.tsv"
+    combo.write_text("('fam1', 'fam2')\t0\n")
+    coofile = tmp_path / "coo.npz"
+    # The excluded middle row is deliberately extreme. The correct unweighted
+    # mean of the retained positional rows is (2 + 4) / 2 = 3, not 335.33.
+    save_npz(coofile, csr_matrix([[2.0], [1000.0], [4.0]]))
+    rbhfile = tmp_path / "alg.rbh"
+    rbhfile.write_text("placeholder\n")
+    monkeypatch.setattr(
+        ptu.rbh_tools,
+        "parse_rbh",
+        lambda _path: pd.DataFrame({"rbh": ["fam1", "fam2"]}),
+    )
+
+    outcoo = tmp_path / "filtered_mean.npz"
+    outsample = tmp_path / "filtered_mean.tsv"
+    ptu.topoumap_genmatrix(
+        str(sampledf),
+        str(combo),
+        str(coofile),
+        str(rbhfile),
+        "sample",
+        [10],
+        [],
+        str(outcoo),
+        str(outsample),
+        "small",
+        method="mean",
+    )
+
+    result = load_npz(outcoo).toarray()
+    assert result[0, 1] == pytest.approx(3.0)
+    kept = pd.read_csv(outsample, sep="\t", index_col=0)
+    assert list(kept.index) == [10, 30]
+    assert list(kept["sample"]) == ["kept_a", "kept_b"]
+
+
 def _stub_umap(monkeypatch):
     """Replace umap.UMAP with a stub so mgt_mlt_umap tests are fast and deterministic."""
+
+    fitted_matrices = []
 
     class _StubMapper:
         def __init__(self, n_points):
@@ -442,9 +492,12 @@ def _stub_umap(monkeypatch):
             pass
 
         def fit(self, matrix):
+            dense = matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
+            fitted_matrices.append(np.array(dense, copy=True))
             return _StubMapper(matrix.shape[0])
 
     monkeypatch.setattr(ptu.umap, "UMAP", _StubUMAP)
+    return fitted_matrices
 
 
 def _write_alg_rbh(path: Path, n_loci: int) -> pd.DataFrame:
@@ -473,6 +526,19 @@ def test_locus_file_analysis_type(tmp_path: Path):
     rbhfile = tmp_path / "alg.rbh"
     _write_alg_rbh(rbhfile, 4)
     assert ptu.locus_file_analysis_type(str(rbhfile)) == "MLT"
+
+    # ``rbh`` and ``gene_group`` are sufficient for parse_rbh(), so column
+    # count alone cannot distinguish this valid minimal RBH from a combo file.
+    minimal_rbh = tmp_path / "minimal.rbh"
+    minimal_rbh.write_text("rbh\tgene_group\nfam1\tA\nfam2\tB\n")
+    assert ptu.locus_file_analysis_type(str(minimal_rbh)) == "MLT"
+
+    malformed_combo = tmp_path / "malformed_combo.tsv"
+    malformed_combo.write_text("['fam1', 'fam2']\t0\n")
+    with pytest.raises(ValueError, match="neither an ALG RBH file"):
+        ptu.locus_file_analysis_type(str(malformed_combo))
+    with pytest.raises(ValueError, match="tuple of exactly two RBH names"):
+        ptu.algcomboix_file_to_dict(str(malformed_combo))
 
     empty = tmp_path / "empty.tsv"
     empty.write_text("\n\n")
@@ -509,7 +575,7 @@ def test_mgt_mlt_umap_mlt_mode_uses_rbh_locus_file(monkeypatch, tmp_path: Path):
     # Regression test: MLT mode passes the multi-column ALG rbh file as the LocusFile,
     #  which used to crash in algcomboix_file_to_dict with
     #  "ValueError: too many values to unpack (expected 2)".
-    _stub_umap(monkeypatch)
+    fitted_matrices = _stub_umap(monkeypatch)
     n_loci = 8
     sampledf = tmp_path / "sampledf.tsv"
     pd.DataFrame({"sample": ["sp0", "sp1"], "taxid_list": ["[1, 10]"] * 2}).to_csv(sampledf, sep="\t")
@@ -518,17 +584,41 @@ def test_mgt_mlt_umap_mlt_mode_uses_rbh_locus_file(monkeypatch, tmp_path: Path):
     dense = np.arange(n_loci * n_loci, dtype=float).reshape(n_loci, n_loci)
     dense = dense + dense.T
     np.fill_diagonal(dense, 0)
+    # A zero off the diagonal represents another structurally missing pair.
+    dense[0, 3] = dense[3, 0] = 0
     coofile = tmp_path / "mlt.coo.npz"
     save_npz(coofile, csr_matrix(dense))
 
+    missing_sentinel = 123456789
     for nan_mode in ["small", "large"]:
         out = tmp_path / f"mlt_{nan_mode}.df"
-        assert ptu.mgt_mlt_umap(str(sampledf), str(rbhfile), str(coofile), nan_mode, 2, 0.1, str(out)) == 0
+        assert ptu.mgt_mlt_umap(
+            str(sampledf),
+            str(rbhfile),
+            str(coofile),
+            nan_mode,
+            2,
+            0.1,
+            str(out),
+            missing_value_as=missing_sentinel,
+        ) == 0
         result = pd.read_csv(out, sep="\t", index_col=0)
         # the points are loci, so the output rows carry the rbh metadata
         assert len(result) == n_loci
         assert {"rbh", "gene_group", "color", "UMAP1", "UMAP2"}.issubset(result.columns)
         assert list(result["rbh"]) == [f"TestALG_genefamily_{i}" for i in range(n_loci)]
+
+        expected_umap_input = dense.copy()
+        if nan_mode == "large":
+            expected_umap_input[expected_umap_input == 0] = missing_sentinel
+        np.testing.assert_array_equal(fitted_matrices[-1], expected_umap_input)
+        # MLT contains N-choose-2 pairs of distinct loci. The diagonal is not
+        # an observed self-distance; it follows the selected missing-data mode.
+        expected_diagonal = 0 if nan_mode == "small" else missing_sentinel
+        np.testing.assert_array_equal(
+            np.diag(fitted_matrices[-1]),
+            np.full(n_loci, expected_diagonal),
+        )
 
     # a non-square matrix cannot be an MLT locus-by-locus matrix
     badcoo = tmp_path / "bad.coo.npz"

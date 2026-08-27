@@ -4788,16 +4788,23 @@ def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     # Save the plot to an HTML file
     bokeh.io.save(plot)
 
+def _sample_df_clade_mask(sampledf, taxids_to_keep, taxids_to_remove) -> pd.Series:
+    """Return a row-aligned mask for the requested inclusive/exclusive clades."""
+    lineage_lists = sampledf["taxid_list"].apply(aliteraleval)
+    keep_mask = lineage_lists.apply(
+        lambda lineage: any(taxid in taxids_to_keep for taxid in lineage)
+    )
+    keep_mask &= lineage_lists.apply(
+        lambda lineage: not any(taxid in taxids_to_remove for taxid in lineage)
+    )
+    return keep_mask
+
+
 def filter_sample_df_by_clades(sampledf, taxids_to_keep, taxids_to_remove) -> pd.DataFrame:
     """
     This takes, as input, a sampledf and a list of taxids to keep. It returns a filtered sampledf.
     """
-    # There is a column in the sample df called taxid_list.
-    # This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
-    # Check to see if any of the taxid_to_keep are in the taxid_list. Return a df of the rows that match.
-    sampledf = sampledf[sampledf["taxid_list"].apply(lambda x: any([y in taxids_to_keep for y in aliteraleval(x)]))]
-    # We now remove the taxids that we know we don't want to keep.
-    return sampledf[sampledf["taxid_list"].apply(lambda x: not any([y in taxids_to_remove for y in aliteraleval(x)]))]
+    return sampledf.loc[_sample_df_clade_mask(sampledf, taxids_to_keep, taxids_to_remove)]
 
 def ALGrbh_to_algcomboix(rbhfile) -> dict:
     """
@@ -4809,6 +4816,40 @@ def ALGrbh_to_algcomboix(rbhfile) -> dict:
                                 df["rbh"], 2)))}
     return alg_combo_to_ix
 
+def _parse_algcomboix_line(line, filepath):
+    """Parse and validate one ``('rbh1', 'rbh2')\tindex`` mapping row."""
+    fields = line.rstrip("\r\n").split("\t")
+    if len(fields) != 2:
+        raise ValueError(
+            f"The ALG combo-index file {filepath} must contain exactly two tab-separated "
+            "fields per row: ('rbh1', 'rbh2') and an integer index."
+        )
+
+    pair_text, index_text = fields
+    try:
+        pair = aliteraleval(pair_text)
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(
+            f"The first field {pair_text!r} in {filepath} is not a valid "
+            "('rbh1', 'rbh2') tuple."
+        ) from exc
+    if not (
+        isinstance(pair, tuple)
+        and len(pair) == 2
+        and all(isinstance(rbh, str) for rbh in pair)
+    ):
+        raise ValueError(
+            f"The first field {pair_text!r} in {filepath} must be a tuple of exactly two RBH names."
+        )
+
+    try:
+        index = int(index_text)
+    except ValueError as exc:
+        raise ValueError(
+            f"The second field {index_text!r} in {filepath} must be an integer index."
+        ) from exc
+    return pair, index
+
 def algcomboix_file_to_dict(ALGcomboixfile) -> dict:
     """
     This takes in a file that contains a dictionary of the unique ALG combinations to an index.
@@ -4819,29 +4860,36 @@ def algcomboix_file_to_dict(ALGcomboixfile) -> dict:
     alg_combo_to_ix = {}
     with open(ALGcomboixfile, "r") as infile:
         for line in infile:
-            line = line.strip()
-            if line:
-                key, value = line.split("\t")
-                rbh1 = key.replace("(", "").replace(")", "").replace("'", "").replace(" ", "").split(",")[0]
-                rbh2 = key.replace("(", "").replace(")", "").replace("'", "").replace(" ", "").split(",")[1]
-                alg_combo_to_ix[tuple([rbh1, rbh2])] = int(value)
+            if line.strip():
+                pair, index = _parse_algcomboix_line(line, ALGcomboixfile)
+                alg_combo_to_ix[pair] = index
     return alg_combo_to_ix
 
 def locus_file_analysis_type(LocusFile) -> str:
     """
     Determines whether a locus file belongs to an MGT or an MLT analysis.
-    MGT analyses use the two-column alg_combo_to_ix .tsv file, in which every
-      line is "('rbh1', 'rbh2')\\tindex". MLT analyses use the multi-column
-      ALG rbh file.
-    The decision is made from the number of tab-separated fields in the first
-      non-empty line: exactly two fields means MGT, anything else means MLT.
+    MGT analyses use the headerless alg_combo_to_ix format, in which every
+      line is "('rbh1', 'rbh2')\\tindex". MLT analyses use an ALG RBH file
+      whose header begins with the mandatory ``rbh`` column. Checking both
+      schemas avoids misclassifying a minimal two-column ``rbh/gene_group``
+      RBH file as an MGT combo-index file.
     """
     if not os.path.exists(LocusFile):
         raise IOError(f"The file {LocusFile} does not exist. Exiting.")
     with open(LocusFile, "r") as infile:
         for line in infile:
             if line.strip():
-                return "MGT" if len(line.rstrip("\n").split("\t")) == 2 else "MLT"
+                fields = line.rstrip("\r\n").split("\t")
+                if fields[0] == "rbh":
+                    return "MLT"
+                try:
+                    _parse_algcomboix_line(line, LocusFile)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"The locus file {LocusFile} is neither an ALG RBH file with an "
+                        "'rbh' header nor a valid ('rbh1', 'rbh2')<TAB>index combo-index file."
+                    ) from exc
+                return "MGT"
     raise ValueError(f"The locus file {LocusFile} is empty, so the analysis type could not be determined. Exiting.")
 
 def construct_coo_matrix_from_sampledf(
@@ -5489,27 +5537,33 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
         if not re.match(r"^[0-9]*$", str(entry)):
             raise ValueError(f"The taxid {entry} is not an integer. Exiting.")
 
-    # These are all of the samples that we may want to filter
+    # These are all of the samples that we may want to filter. Matrix rows are
+    # positional, so derive a positional boolean mask from the dataframe rows;
+    # dataframe index labels may be nonconsecutive or otherwise unrelated to
+    # the 0..N-1 row coordinates of the sparse matrix.
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
-    # Keep only the samples that are in taxids_to_keep and not in taxids_to_remove
-    cdf2 = filter_sample_df_by_clades(cdf, taxids_to_keep, taxids_to_remove)
+    keep_mask = _sample_df_clade_mask(cdf, taxids_to_keep, taxids_to_remove)
+    cdf2 = cdf.loc[keep_mask]
     # If the length of the cdf2 is 0, then we have no samples to process.
     # We must exit and tell the user that there is nothing here.
     if len(cdf2) == 0:
         raise ValueError(f"There are no samples to process for taxids {taxids_to_keep}, excluding {taxids_to_remove}. Exiting.")
-    # save this to outsampledf, keeping the index. These are the samples we will continue to process
+    print("loading lil matrix")
+    lil = load_npz(coofile).tolil()
+    if lil.shape[0] != len(cdf):
+        raise ValueError(
+            f"The number of rows in the input matrix, {lil.shape[0]}, does not match "
+            f"the number of rows in the sample dataframe, {len(cdf)}. Exiting."
+        )
+    # Select by row position, never by the dataframe's external index labels.
+    kept_row_positions = np.flatnonzero(keep_mask.to_numpy())
+    print("subsetting the lil matrix")
+    lil = lil[kept_row_positions]
+    # Save the filtered metadata only after its row alignment with the matrix
+    # has been validated. Preserve the user's index labels in this report.
     cdf2.to_csv(outsampledf, sep = "\t", index = True)
     print("This is the dataframe loaded for the samples")
     print(cdf2)
-
-    # Get a list of the indices that are in cdf that are not in cdf2.
-    ixnotin = [x for x in cdf.index if x not in cdf2.index]
-    # These are the indices that we want to remove from the lil matrix.
-    print("loading lil matrix")
-    lil = load_npz(coofile).tolil()
-    # we are removing the row indices that are not in cdf2
-    print("subsetting the lil matrix")
-    lil = lil[[x for x in range(lil.shape[0]) if x not in ixnotin]]
     # now convert to a csr matrix for multiplication
     print("converting to csr matrix")
     matrix = lil.tocsr()
@@ -5709,6 +5763,10 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
         # Here we switch the representation, namely we don't have to access the data with .data now that this
         #  is a dense matrix.
         print(f"setting zeros to {smalllargeNaN}")
+        # MLT is an N-choose-2 encoding of pairs of *distinct* loci, not a
+        # conventional metric distance matrix. Its diagonal is outside the
+        # observation space and is therefore structurally missing: it follows
+        # the selected missing-value mode (sentinel here, zero in small mode).
         matrix[matrix == 0] = smalllargeNaN
         # now we convert the -1s to 0
         print("converting -1s to 0")
