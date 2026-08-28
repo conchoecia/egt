@@ -4788,16 +4788,23 @@ def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     # Save the plot to an HTML file
     bokeh.io.save(plot)
 
+def _sample_df_clade_mask(sampledf, taxids_to_keep, taxids_to_remove) -> pd.Series:
+    """Return a row-aligned mask for the requested inclusive/exclusive clades."""
+    lineage_lists = sampledf["taxid_list"].apply(aliteraleval)
+    keep_mask = lineage_lists.apply(
+        lambda lineage: any(taxid in taxids_to_keep for taxid in lineage)
+    )
+    keep_mask &= lineage_lists.apply(
+        lambda lineage: not any(taxid in taxids_to_remove for taxid in lineage)
+    )
+    return keep_mask
+
+
 def filter_sample_df_by_clades(sampledf, taxids_to_keep, taxids_to_remove) -> pd.DataFrame:
     """
     This takes, as input, a sampledf and a list of taxids to keep. It returns a filtered sampledf.
     """
-    # There is a column in the sample df called taxid_list.
-    # This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
-    # Check to see if any of the taxid_to_keep are in the taxid_list. Return a df of the rows that match.
-    sampledf = sampledf[sampledf["taxid_list"].apply(lambda x: any([y in taxids_to_keep for y in aliteraleval(x)]))]
-    # We now remove the taxids that we know we don't want to keep.
-    return sampledf[sampledf["taxid_list"].apply(lambda x: not any([y in taxids_to_remove for y in aliteraleval(x)]))]
+    return sampledf.loc[_sample_df_clade_mask(sampledf, taxids_to_keep, taxids_to_remove)]
 
 def ALGrbh_to_algcomboix(rbhfile) -> dict:
     """
@@ -4809,6 +4816,40 @@ def ALGrbh_to_algcomboix(rbhfile) -> dict:
                                 df["rbh"], 2)))}
     return alg_combo_to_ix
 
+def _parse_algcomboix_line(line, filepath):
+    """Parse and validate one ``('rbh1', 'rbh2')\tindex`` mapping row."""
+    fields = line.rstrip("\r\n").split("\t")
+    if len(fields) != 2:
+        raise ValueError(
+            f"The ALG combo-index file {filepath} must contain exactly two tab-separated "
+            "fields per row: ('rbh1', 'rbh2') and an integer index."
+        )
+
+    pair_text, index_text = fields
+    try:
+        pair = aliteraleval(pair_text)
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(
+            f"The first field {pair_text!r} in {filepath} is not a valid "
+            "('rbh1', 'rbh2') tuple."
+        ) from exc
+    if not (
+        isinstance(pair, tuple)
+        and len(pair) == 2
+        and all(isinstance(rbh, str) for rbh in pair)
+    ):
+        raise ValueError(
+            f"The first field {pair_text!r} in {filepath} must be a tuple of exactly two RBH names."
+        )
+
+    try:
+        index = int(index_text)
+    except ValueError as exc:
+        raise ValueError(
+            f"The second field {index_text!r} in {filepath} must be an integer index."
+        ) from exc
+    return pair, index
+
 def algcomboix_file_to_dict(ALGcomboixfile) -> dict:
     """
     This takes in a file that contains a dictionary of the unique ALG combinations to an index.
@@ -4819,13 +4860,37 @@ def algcomboix_file_to_dict(ALGcomboixfile) -> dict:
     alg_combo_to_ix = {}
     with open(ALGcomboixfile, "r") as infile:
         for line in infile:
-            line = line.strip()
-            if line:
-                key, value = line.split("\t")
-                rbh1 = key.replace("(", "").replace(")", "").replace("'", "").replace(" ", "").split(",")[0]
-                rbh2 = key.replace("(", "").replace(")", "").replace("'", "").replace(" ", "").split(",")[1]
-                alg_combo_to_ix[tuple([rbh1, rbh2])] = int(value)
+            if line.strip():
+                pair, index = _parse_algcomboix_line(line, ALGcomboixfile)
+                alg_combo_to_ix[pair] = index
     return alg_combo_to_ix
+
+def locus_file_analysis_type(LocusFile) -> str:
+    """
+    Determines whether a locus file belongs to an MGT or an MLT analysis.
+    MGT analyses use the headerless alg_combo_to_ix format, in which every
+      line is "('rbh1', 'rbh2')\\tindex". MLT analyses use an ALG RBH file
+      whose header begins with the mandatory ``rbh`` column. Checking both
+      schemas avoids misclassifying a minimal two-column ``rbh/gene_group``
+      RBH file as an MGT combo-index file.
+    """
+    if not os.path.exists(LocusFile):
+        raise IOError(f"The file {LocusFile} does not exist. Exiting.")
+    with open(LocusFile, "r") as infile:
+        for line in infile:
+            if line.strip():
+                fields = line.rstrip("\r\n").split("\t")
+                if fields[0] == "rbh":
+                    return "MLT"
+                try:
+                    _parse_algcomboix_line(line, LocusFile)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"The locus file {LocusFile} is neither an ALG RBH file with an "
+                        "'rbh' header nor a valid ('rbh1', 'rbh2')<TAB>index combo-index file."
+                    ) from exc
+                return "MGT"
+    raise ValueError(f"The locus file {LocusFile} is empty, so the analysis type could not be determined. Exiting.")
 
 def construct_coo_matrix_from_sampledf(
     sampledf,
@@ -5472,27 +5537,33 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
         if not re.match(r"^[0-9]*$", str(entry)):
             raise ValueError(f"The taxid {entry} is not an integer. Exiting.")
 
-    # These are all of the samples that we may want to filter
+    # These are all of the samples that we may want to filter. Matrix rows are
+    # positional, so derive a positional boolean mask from the dataframe rows;
+    # dataframe index labels may be nonconsecutive or otherwise unrelated to
+    # the 0..N-1 row coordinates of the sparse matrix.
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
-    # Keep only the samples that are in taxids_to_keep and not in taxids_to_remove
-    cdf2 = filter_sample_df_by_clades(cdf, taxids_to_keep, taxids_to_remove)
+    keep_mask = _sample_df_clade_mask(cdf, taxids_to_keep, taxids_to_remove)
+    cdf2 = cdf.loc[keep_mask]
     # If the length of the cdf2 is 0, then we have no samples to process.
     # We must exit and tell the user that there is nothing here.
     if len(cdf2) == 0:
         raise ValueError(f"There are no samples to process for taxids {taxids_to_keep}, excluding {taxids_to_remove}. Exiting.")
-    # save this to outsampledf, keeping the index. These are the samples we will continue to process
+    print("loading lil matrix")
+    lil = load_npz(coofile).tolil()
+    if lil.shape[0] != len(cdf):
+        raise ValueError(
+            f"The number of rows in the input matrix, {lil.shape[0]}, does not match "
+            f"the number of rows in the sample dataframe, {len(cdf)}. Exiting."
+        )
+    # Select by row position, never by the dataframe's external index labels.
+    kept_row_positions = np.flatnonzero(keep_mask.to_numpy())
+    print("subsetting the lil matrix")
+    lil = lil[kept_row_positions]
+    # Save the filtered metadata only after its row alignment with the matrix
+    # has been validated. Preserve the user's index labels in this report.
     cdf2.to_csv(outsampledf, sep = "\t", index = True)
     print("This is the dataframe loaded for the samples")
     print(cdf2)
-
-    # Get a list of the indices that are in cdf that are not in cdf2.
-    ixnotin = [x for x in cdf.index if x not in cdf2.index]
-    # These are the indices that we want to remove from the lil matrix.
-    print("loading lil matrix")
-    lil = load_npz(coofile).tolil()
-    # we are removing the row indices that are not in cdf2
-    print("subsetting the lil matrix")
-    lil = lil[[x for x in range(lil.shape[0]) if x not in ixnotin]]
     # now convert to a csr matrix for multiplication
     print("converting to csr matrix")
     matrix = lil.tocsr()
@@ -5612,11 +5683,13 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
                          If 0, missing values are set as 0. If non-zero, missing values are replaced
                          with the sentinel value (typically a large number like 999999999999).
                          These missing values are averaged out in the phylogenetic weighting.
+                         The strings "small" and "large" are also accepted: "small" maps to 0 and
+                         "large" maps to missing_value_as.
       - n_neighbors:    This is the number of neighbors to use for the UMAP. This is an integer.
       - min_dist:       This is the minimum distance to use for the UMAP. This is a float.
       - UMAPdfout:      This is the file that contains the UMAP dataframe.
-                         This is a tab-separated file that contains the rbh db file, plus
-                         the UMAP1 and UMAP2 coordinates.
+                         This is a tab-separated file that contains the sample dataframe (MGT) or
+                         the rbh db file (MLT), plus the UMAP1 and UMAP2 coordinates.
     """
     # check that the types are correct
     if type(n_neighbors) not in [int, float]:
@@ -5635,24 +5708,41 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
 
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
-    # Read in the LocusFile
-    ALGcomboix = algcomboix_file_to_dict(LocusFile)
+    # Read in the LocusFile. Its format tells us whether this is an MGT or an MLT analysis:
+    #  MGT uses the two-column alg_combo_to_ix file, MLT uses the multi-column ALG rbh file.
+    analysis_type = locus_file_analysis_type(LocusFile)
     lil = load_npz(coofile).tolil()
 
-    # check that the largest row index of the lil matrix is less than the largest index of cdf - 1
-    if (lil.shape[0] != len(cdf)):
-        raise ValueError(f"The largest row index of the lil matrix, {lil.shape[0]}, is greater than the largest index of cdf, {max(cdf.index)}. Exiting.")
-    # make sure that the other axis is the same length as ALGcomboix
-    if (lil.shape[1] != len(ALGcomboix)):
-        raise ValueError(f"The largest column index of the lil matrix, {lil.shape[1]}, is greater than the length of ALGcomboix, {len(ALGcomboix)}. Exiting.")
-    if n_neighbors >= len(cdf):
+    if analysis_type == "MGT":
+        ALGcomboix = algcomboix_file_to_dict(LocusFile)
+        # each point is one genome, so the rows of the matrix must match the sample dataframe
+        if (lil.shape[0] != len(cdf)):
+            raise ValueError(f"The number of rows of the lil matrix, {lil.shape[0]}, does not match the number of samples in the sample dataframe, {len(cdf)}. Exiting.")
+        # make sure that the other axis is the same length as ALGcomboix
+        if (lil.shape[1] != len(ALGcomboix)):
+            raise ValueError(f"The number of columns of the lil matrix, {lil.shape[1]}, does not match the length of ALGcomboix, {len(ALGcomboix)}. Exiting.")
+        pointdf = cdf
+    else:
+        # MLT - each point is one ALG locus. The matrix from topoumap_genmatrix() is
+        #  loci x loci, so both axes must match the number of loci in the ALG rbh file.
+        pointdf = rbh_tools.parse_rbh(LocusFile)
+        if (lil.shape[0] != len(pointdf)) or (lil.shape[1] != len(pointdf)):
+            raise ValueError(f"The shape of the lil matrix, {lil.shape}, does not match the number of loci in the ALG rbh file, {len(pointdf)}. Exiting.")
+    if n_neighbors >= len(pointdf):
         # TODO 20250612 - It may be that we should save an empty file in this case to prevent crashes elsewhere.
-        raise ValueError(f"The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Exiting.")
+        raise ValueError(f"The number of points, {len(pointdf)}, is less than the number of neighbors, {n_neighbors}. Exiting.")
     # If we pass these checks, we should be fine
 
     # Convert to numeric if needed (for backwards compatibility with string inputs)
     if isinstance(smalllargeNaN, str):
-        smalllargeNaN = int(smalllargeNaN)
+        # "small" and "large" are the values the CLI and the Snakemake wildcards use:
+        #  "small" keeps missing values encoded as 0, "large" uses the missing_value_as sentinel.
+        if smalllargeNaN == "small":
+            smalllargeNaN = 0
+        elif smalllargeNaN == "large":
+            smalllargeNaN = missing_value_as
+        else:
+            smalllargeNaN = int(smalllargeNaN)
     
     # Check that smalllargeNaN is numeric
     if not isinstance(smalllargeNaN, (int, float)):
@@ -5673,6 +5763,10 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
         # Here we switch the representation, namely we don't have to access the data with .data now that this
         #  is a dense matrix.
         print(f"setting zeros to {smalllargeNaN}")
+        # MLT is an N-choose-2 encoding of pairs of *distinct* loci, not a
+        # conventional metric distance matrix. Its diagonal is outside the
+        # observation space and is therefore structurally missing: it follows
+        # the selected missing-value mode (sentinel here, zero in small mode).
         matrix[matrix == 0] = smalllargeNaN
         # now we convert the -1s to 0
         print("converting -1s to 0")
@@ -5695,7 +5789,7 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
 
     # We need a unique set of files for each of these
     # In every case, we must produce a .df file and a .bokeh.html file
-    print(f"    CALCULATING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+    print(f"    CALCULATING {analysis_type} - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
     reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
     start = time.time()
     # Enter the context manager to catch warnings.
@@ -5719,7 +5813,9 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
     print("This is a sample of the embedding")
     print(pd.DataFrame(mapper.embedding_, columns = ["UMAP1", "UMAP2"]))
     start = time.time()
-    umap_df = umap_mapper_to_df(mapper, cdf)
+    # For MGT the points are genomes, so we attach the coordinates to the sample dataframe.
+    # For MLT the points are ALG loci, so we attach the coordinates to the rbh dataframe.
+    umap_df = umap_mapper_to_df(mapper, pointdf)
     stop  = time.time()
     print("     - It took {} seconds to make the df".format(stop - start))
     print("   - Running the function to_csv")
@@ -6738,6 +6834,24 @@ def _cmd_combine_distances(args):
     return 0
 
 
+def _cmd_mlt_matrix(args):
+    topoumap_genmatrix(
+        sampledffile=args.sampledf,
+        ALGcomboixfile=args.algcomboix,
+        coofile=args.coo,
+        rbhfile=args.alg_rbh,
+        sample=args.sample,
+        taxids_to_keep=args.taxids_to_keep,
+        taxids_to_remove=args.taxids_to_remove,
+        outcoofile=args.coo_out,
+        outsampledf=args.sampledf_out,
+        missing_values=args.nan_mode,
+        method=args.method,
+        missing_value_as=args.missing_value_as,
+    )
+    return 0
+
+
 def _cmd_odog_umap(args):
     plot_umap_from_files(
         sampledffile=args.sampledf,
@@ -6837,6 +6951,21 @@ def main(argv=None):
     p.add_argument("--sample-column", default="sample", help="sampledf column holding the species key.")
     p.add_argument("--no-check-paths", action="store_true", help="Skip filesystem existence check for each .gb.gz path.")
     p.set_defaults(func=_cmd_combine_distances)
+
+    p = sub.add_parser("mlt-matrix", help="Average the genome-by-locus-pair distance matrix into an MLT locus-by-locus matrix (the --coo input for mgt-mlt-umap in MLT mode).")
+    p.add_argument("--sampledf", required=True, help="Sample dataframe TSV from build-distances.")
+    p.add_argument("--algcomboix", required=True, help="ALG combo → index TSV from `algcomboix`.")
+    p.add_argument("--coo", required=True, help="Genome-by-locus-pair .npz from combine-distances (e.g. allsamples.coo.npz).")
+    p.add_argument("--alg-rbh", required=True, help="ALG database RBH file; its loci must match the ones used to build `algcomboix`.")
+    p.add_argument("--sample", default="mlt", help="Analysis label (bookkeeping only; not used in the calculation).")
+    p.add_argument("--taxids-to-keep", required=True, type=int, nargs="+", help="NCBI taxids; samples whose lineage contains any of these are kept.")
+    p.add_argument("--taxids-to-remove", type=int, nargs="*", default=[], help="NCBI taxids; samples whose lineage contains any of these are removed.")
+    p.add_argument("--nan-mode", required=True, choices=["small", "large"], help="How to treat missing distances.")
+    p.add_argument("--method", default="phylogenetic", choices=["phylogenetic", "mean"], help="How distances are averaged across genomes.")
+    p.add_argument("--coo-out", required=True, help="Output locus-by-locus .npz path.")
+    p.add_argument("--sampledf-out", required=True, help="Output TSV (.tsv or .df) of the samples kept after taxid filtering.")
+    p.add_argument("--missing-value-as", type=int, default=9999999999, help="Sentinel used for missing distances in 'large' mode.")
+    p.set_defaults(func=_cmd_mlt_matrix)
 
     p = sub.add_parser("odog-umap", help="One-Dot-One-Genome UMAP: project genomes onto an ALG-topology UMAP.")
     p.add_argument("--sampledf", required=True, help="Sample dataframe TSV from build-distances.")

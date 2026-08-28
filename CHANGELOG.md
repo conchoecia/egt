@@ -8,7 +8,17 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+### Added
+- `egt phylotreeumap mlt-matrix` — new subcommand exposing `topoumap_genmatrix()`: averages the genome-by-locus-pair distance matrix (from `combine-distances`) into the MLT locus-by-locus matrix that `mgt-mlt-umap` consumes in MLT mode. Previously this stage was only reachable through the Snakemake workflows, so the MLT arm of the pipeline could not be run stage-by-stage from the CLI.
+
+### Fixed
+- `egt phylotreeumap mgt-mlt-umap` — MLT mode crashed with `ValueError: too many values to unpack (expected 2)` because the `--locus-file` was always parsed as the two-column MGT alg_combo_to_ix file, even when it was the ALG RBH file that MLT mode documents. The locus-file format is now detected from its schema (`rbh` header for MLT; validated `('rbh1', 'rbh2')<TAB>index` rows for MGT), including minimal two-column RBH files. In MLT mode the matrix is validated as square with one row per RBH locus, and UMAP coordinates are attached to the RBH metadata instead of the sample dataframe. The `odolGenUMAP` Snakemake rule hit the same crash.
+- `egt phylotreeumap mgt-mlt-umap` — `--nan-mode small|large` (the only values the CLI accepts) crashed with `ValueError: invalid literal for int() with base 10: 'small'` before the UMAP was ever computed. `"small"` and `"large"` now map to `0` and `--missing-value-as` respectively; numeric strings keep working.
+- `egt phylotreeumap mlt-matrix` — taxid filtering now selects sparse-matrix rows by dataframe row position instead of external index labels, preventing excluded genomes from leaking into an arithmetic mean (or causing a phylogenetic-weight dimension mismatch) when the sample dataframe has a nonconsecutive index.
+
 ### Internal
+- `tests/test_canidae_synthetic_end_to_end.py` — end-to-end MGT + MLT regression test on a synthetic Canidae-like dataset (4 ALGs × 20 loci, 8 species × 3 simulated assemblies, public NCBI taxids only): runs the real CLI chain `algcomboix → combine-distances → mlt-matrix → mgt-mlt-umap → plotdfs`, asserting exact matrix values, metadata round-trips, embedding cluster structure, and that the paramsweep PDFs are legal with an exactly predictable scatter-dot count. Everything is deterministic except the UMAP embedding.
+- `tests/test_canidae_realdata_end_to_end.py` — the same chain on a real canid-genome data bundle, gated behind the `EGT_CANIDAE_REALDATA` environment variable (skipped silently in CI; no data or paths live in the repo).
 - CI: pin `statsmodels<0.15` in the `dev` extra. statsmodels 0.15.0 (released after the last green main run) removed the deprecated `statsmodels.sandbox.stats.multicomp.multipletests` alias that goatools (through 1.6.5) still imports lazily, which broke `tests/test_go_benchmark_goatools_ref.py` on every fresh install. Drop the pin once goatools migrates to `statsmodels.stats.multitest`.
 
 ## [0.2.5] - 2026-08-19
