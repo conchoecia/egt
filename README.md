@@ -134,6 +134,10 @@ against the BCnS ALG database. From there, most analyses are a single
 ### PhyloTreeUMAP — manifold projection of per-species ALG state
 
 ```sh
+# Inputs used throughout this example
+ALG_RBH=/path/to/LG_db/BCnSSimakov2022/BCnSSimakov2022.rbh
+KEEP_TAXID=9608  # lineage taxid to retain when averaging the MLT matrix
+
 # 1. build per-sample distance matrices + sampledf
 egt phylotreeumap build-distances \
     --rbh-dir /path/to/rbh_files \
@@ -143,12 +147,67 @@ egt phylotreeumap build-distances \
 
 # 2. index ALG locus pairs
 egt phylotreeumap algcomboix \
-    --alg-rbh /path/to/LG_db/BCnSSimakov2022/BCnSSimakov2022.rbh \
+    --alg-rbh "$ALG_RBH" \
     --output GTUMAP/alg_combo_to_ix.tsv
 
-# 3. run the UMAP + HTML plot (MGT / MLT / ODOG variants)
-egt phylotreeumap mgt-mlt-umap --help
+# 3. combine the per-sample files into the genome-by-locus-pair matrix
+egt phylotreeumap combine-distances \
+    --sampledf GTUMAP/sampledf.tsv \
+    --algcomboix GTUMAP/alg_combo_to_ix.tsv \
+    --output GTUMAP/allsamples.coo.npz
+
+# 4a. MGT: embed genomes. The combo-index file identifies this as MGT input.
+egt phylotreeumap mgt-mlt-umap \
+    --sampledf GTUMAP/sampledf.tsv \
+    --locus-file GTUMAP/alg_combo_to_ix.tsv \
+    --coo GTUMAP/allsamples.coo.npz \
+    --nan-mode large \
+    --n-neighbors 50 \
+    --min-dist 0.1 \
+    --df-out GTUMAP/mgt.df
+
+# 4b. MLT: average across the retained genomes into a locus-by-locus matrix.
+# The default --method is phylogenetic; use --method mean only when an
+# unweighted arithmetic mean is intended.
+egt phylotreeumap mlt-matrix \
+    --sampledf GTUMAP/sampledf.tsv \
+    --algcomboix GTUMAP/alg_combo_to_ix.tsv \
+    --coo GTUMAP/allsamples.coo.npz \
+    --alg-rbh "$ALG_RBH" \
+    --taxids-to-keep "$KEEP_TAXID" \
+    --nan-mode small \
+    --coo-out GTUMAP/mlt.coo.npz \
+    --sampledf-out GTUMAP/mlt.sampledf.tsv
+
+# Embed loci. An ALG RBH file in --locus-file identifies this as MLT input.
+egt phylotreeumap mgt-mlt-umap \
+    --sampledf GTUMAP/mlt.sampledf.tsv \
+    --locus-file "$ALG_RBH" \
+    --coo GTUMAP/mlt.coo.npz \
+    --nan-mode large \
+    --n-neighbors 15 \
+    --min-dist 0.1 \
+    --df-out GTUMAP/mlt.df
+
+# 5. render standalone interactive plots
+egt phylotreeumap plot-html \
+    --umap-df GTUMAP/mgt.df \
+    --analysis-type MGT \
+    --title "MGT" \
+    --html-out GTUMAP/mgt.html
+
+egt phylotreeumap plot-html \
+    --umap-df GTUMAP/mlt.df \
+    --analysis-type MLT \
+    --title "MLT" \
+    --html-out GTUMAP/mlt.html
 ```
+
+`--nan-mode large` replaces structural missing distances with the configured
+sentinel (default `9999999999`) before UMAP; `small` represents them as zero.
+For MLT, the matrix is an N-choose-2 encoding of pairs of distinct loci, so its
+diagonal is structural missing data rather than an observed zero-distance
+measurement.
 
 ### ALG fusion analysis on a calibrated tree
 
@@ -307,6 +366,11 @@ Each workflow is standalone and parameterized via a YAML config.
 - **Sample dataframe** (`sampledf.tsv`) — output of
   `egt phylotreeumap build-distances`; consumed by most downstream commands.
 - **ALG database RBH** — e.g. `BCnSSimakov2022.rbh`, from `odp`'s LG_db.
+- **ALG combo-index TSV** — headerless output of `egt phylotreeumap
+  algcomboix`; every row is `('rbh1', 'rbh2')<TAB>index`. Pass this file as
+  `--locus-file` for MGT. Pass the headered ALG database RBH instead for MLT;
+  `mgt-mlt-umap` validates these schemas rather than guessing from column
+  count.
 - **Newick trees** — ete4-readable. `egt taxids-to-newick` emits these.
 - **Divergence-time tables** — TSV, as accepted by
   `egt newick-to-common-ancestors`.
