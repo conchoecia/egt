@@ -8,6 +8,8 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-28
+
 ### Added
 - `egt phylotreeumap mlt-matrix` — new subcommand exposing `topoumap_genmatrix()`: averages the genome-by-locus-pair distance matrix (from `combine-distances`) into the MLT locus-by-locus matrix that `mgt-mlt-umap` consumes in MLT mode. Previously this stage was only reachable through the Snakemake workflows, so the MLT arm of the pipeline could not be run stage-by-stage from the CLI.
 

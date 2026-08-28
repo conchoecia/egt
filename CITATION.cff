@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite both the software and the preferred citation below."
 title: "egt: Evolutionary Genome Topology analysis toolkit"
-version: 0.2.5
+version: 0.2.6
 license: MIT
 repository-code: "https://github.com/conchoecia/egt"
 authors:
