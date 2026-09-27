@@ -8,6 +8,11 @@ Pull requests should append entries to `[Unreleased]` under the appropriate sect
 
 ## [Unreleased]
 
+### Added
+- `egt phylotreeumap build-distances --distance-mode index` uses consecutive retained-marker ranks within each chromosome, following EGTool's index-distance definition. The Python distance builders accept the same mode. Index distances have separate filenames, explicit unit metadata, and cache checks; combining mixed coordinate/index modes is rejected.
+- The PhyloTreeUMAP workflows accept `distance_mode: index` and use a separate `GTUMAP_index` results directory. The default coordinate mode retains the existing distance calculation.
+
+
 ## [0.2.6] - 2026-08-28
 
 ### Added

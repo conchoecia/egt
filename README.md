@@ -98,6 +98,10 @@ Input is reciprocal-best-hits (RBH) data from
 metazoan `BCnSSimakov2022` set); the approach generalizes to any clade for which
 an appropriate ortholog / ALG reference is available.
 
+For gene-order distances instead of coordinate differences, use
+`build-distances --distance-mode index`; see [index-distance inputs](docs/index-distances.md)
+for units, missing-marker behavior and ancestral-order limitations.
+
 ## Getting Started
 
 Install the released package — **bioconda** pulls in every dependency
