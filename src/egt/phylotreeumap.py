@@ -42,6 +42,7 @@ from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz, csr_matrix
 from scipy.spatial.distance import pdist, squareform
 import sys
 import time
+import tempfile
 import umap
 import umap.plot
 import warnings
@@ -62,6 +63,9 @@ from egt.plot_alg_fusions import assign_colors_to_nodes, SplitLossColocTree, hex
 # odp-specific imports
 source_path = os.path.join(thisfile_path, "../source")
 from egt import rbh_tools
+from egt.gene_index import index_coordinates
+from egt.distance_modes import (validate_mode, distance_filename, distance_metadata,
+                                write_metadata, check_cached_distances)
 sys.path.insert(1, source_path)
 from egt import rbh_tools
 
@@ -756,7 +760,7 @@ def umap_mapper_to_df(mapper, cdf):
     df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
     return pd.concat([cdf, df_embedding], axis = 1)
 
-def rbh_to_gb(sample, rbhdf, outfile):
+def rbh_to_gb(sample, rbhdf, outfile, *, distance_mode="coordinate"):
     """
     Converts the rbh dataframe to a groupby object. This is saved to a file for later consumption.
     This gets the distances between all of the pairs of orthologs and saves it to another format.
@@ -774,6 +778,11 @@ def rbh_to_gb(sample, rbhdf, outfile):
 
     This is essentially a spare distance matrix, and is used downstream by other parts of the game.
     """
+    # Index mode follows EGTool's retained-gene rank definition. The input
+    # frame is never modified, and ranks reset on each chromosome.
+    metadata = distance_metadata(sample, rbhdf, distance_mode)
+    if distance_mode == "index":
+        rbhdf = index_coordinates(sample, rbhdf)
     # Initialize an empty DataFrame to store the results
     result_df = pd.DataFrame(columns=["rbh1", "rbh2", "distance"])
 
@@ -809,7 +818,15 @@ def rbh_to_gb(sample, rbhdf, outfile):
     # DO NOT sort by the rbh1 and rbh2 columns. This does not help compression
 
     # Save the result DataFrame to a tsv file
-    result_df.to_csv(outfile, sep="\t", index=False, compression="gzip")
+    with tempfile.NamedTemporaryFile(dir=Path(outfile).parent, prefix=Path(outfile).name + ".", delete=False) as temp:
+        temp_path = temp.name
+    try:
+        result_df.to_csv(temp_path, sep="\t", index=False, compression="gzip")
+        os.replace(temp_path, outfile)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+    write_metadata(outfile, metadata)
 
 def _apply_custom_animal_topology_to_taxid_lineage(lineage, warn=True):
     """Return lineage with manuscript animal topology replacing NCBI Eumetazoa."""
@@ -910,7 +927,7 @@ def create_directories_if_not_exist(file_path):
         if not os.path.exists(path_so_far):
             os.makedirs(path_so_far)
 
-def rbh_to_distance_gbgz(rbhfile, outfile, ALGname):
+def rbh_to_distance_gbgz(rbhfile, outfile, ALGname, *, distance_mode="coordinate"):
     """
     This takes a single rbh file and converts it to a distance matrix.
     It compresses the distance matrix and saves it to a file.
@@ -929,6 +946,7 @@ def rbh_to_distance_gbgz(rbhfile, outfile, ALGname):
         Simakov2022BCnS_genefamily_10008  Simakov2022BCnS_genefamily_10927  42360830
         ```
     """
+    validate_mode(distance_mode)
     print(f"ALGname is {ALGname}")
     print(f"rbhfile is {rbhfile}")
     print(f"outfile is {outfile}")
@@ -958,17 +976,18 @@ def rbh_to_distance_gbgz(rbhfile, outfile, ALGname):
     # check that the file ends in .gb.gz
     if not gb_filepath.endswith(".gb.gz"):
         raise IOError(f"The file {gb_filepath} does not end in .gb.gz. Exiting.")
-    if not os.path.exists(gb_filepath):
-        rbh_to_gb(thissample, df, gb_filepath)
+    if not check_cached_distances(gb_filepath, distance_metadata(thissample, df, distance_mode)):
+        rbh_to_gb(thissample, df, gb_filepath, distance_mode=distance_mode)
 
 def sampleToRbhFileDict_to_sample_matrix(sampleToRbhFileDict, ALGname,
                                          gbgz_directory,
-                                         outtsv, unannotated_color = "#3f3f7f"):
+                                         outtsv, unannotated_color = "#3f3f7f", *, distance_mode="coordinate"):
     """
     This is similar to the rbh_directory_to_distance_matrix,
     but it does not calculate the distance matrix.
     """
 
+    validate_mode(distance_mode)
     print("The sampleToRbhFileDict is: ", sampleToRbhFileDict)
     print(sampleToRbhFileDict)
 
@@ -1012,16 +1031,24 @@ def sampleToRbhFileDict_to_sample_matrix(sampleToRbhFileDict, ALGname,
             raise ValueError( f"There is a non-numeric character in the taxid string for the sample {thissample} when split with '-'. The file was {rbhfile} Exiting." )
         # This is where we skip the gb.gz distance matrix creation.
 
-        gb_filepath = os.path.join(gbgz_directory, f"{thissample}.gb.gz")
+        gb_filepath = os.path.join(gbgz_directory, distance_filename(thissample, distance_mode))
+        check_cached_distances(gb_filepath, distance_metadata(thissample, df, distance_mode))
         # now we add the remaining necessary information to the entries dict
         taxid_dict = {"sample": thissample}
         # add all the outputs of NCBITaxa to the taxid_dict
         taxid_dict.update(NCBI_taxid_to_taxdict(ncbi, taxid))
         # now we need to add the genome size, number of chromosomes, and the filename
         # The genome size is the maximum value of each of the summed {thissample}_pos columns when grouped by {thissample}_scaf
-        taxid_dict["genome_size"] = df.groupby(f"{thissample}_scaf").max().sum()[f"{thissample}_pos"]
+        taxid_dict["genome_size"] = (np.nan if distance_mode == "index" else df.groupby(f"{thissample}_scaf").max().sum()[f"{thissample}_pos"])
+        taxid_dict["distance_mode"] = distance_mode
+        taxid_dict["distance_units"] = distance_metadata(thissample, df, distance_mode)["distance_units"]
+        if distance_mode == "index":
+            # Gene ranks do not specify a physical genome length.
+            taxid_dict["genome_size"] = np.nan
         # The number of chromosomes is the number of unique {thissample}_scaf values
-        taxid_dict["number_of_chromosomes"] = df[f"{thissample}_scaf"].nunique()
+        counted = index_coordinates(thissample, df) if distance_mode == "index" else df.dropna(subset=[f"{thissample}_scaf", f"{thissample}_pos"])
+        taxid_dict["number_of_chromosomes"] = counted[f"{thissample}_scaf"].nunique()
+        taxid_dict["number_of_markers"] = len(counted)
         taxid_dict["rbh_filepath"] = rbhfile
         taxid_dict["rbh_filepath_abs"] = os.path.abspath(rbhfile)
         taxid_dict["rbh_filename"] = os.path.basename(rbhfile)
@@ -1048,7 +1075,7 @@ def sampleToRbhFileDict_to_sample_matrix(sampleToRbhFileDict, ALGname,
 
 def rbh_directory_to_distance_matrix(rbh_directory, ALGname, unannotated_color = "#3f3f7f",
                                      outtsv = "GTUMAP/sampledf.tsv",
-                                     outputdir = "GTUMAP/distance_matrices/") -> pd.DataFrame:
+                                     outputdir = "GTUMAP/distance_matrices/", *, distance_mode="coordinate") -> pd.DataFrame:
     """
     This program does two things.
       1. It takes all of the rbh files in the directory and calculates the distance matrix of all of the BCnS ALGs.
@@ -1106,6 +1133,7 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname, unannotated_color =
 
     Saves all of them in a directory called results. They
     """
+    validate_mode(distance_mode)
     # safely create the required output directories.
     create_directories_if_not_exist(outtsv)
     create_directories_if_not_exist(outputdir)
@@ -1151,9 +1179,9 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname, unannotated_color =
         # check that the second field when splitting on '-' is an integer
         if not re.match( r"^[0-9]*$", thissample.split("-")[1] ):
             raise ValueError( f"There is a non-numeric character in the taxid string for the sample {thissample} when split with '-'. The file was {rbhfile} Exiting." )
-        gb_filepath = os.path.join(outputdir, f"{thissample}.gb.gz")
-        if not os.path.exists(gb_filepath):
-            rbh_to_gb(thissample, df, gb_filepath)
+        gb_filepath = os.path.join(outputdir, distance_filename(thissample, distance_mode))
+        if not check_cached_distances(gb_filepath, distance_metadata(thissample, df, distance_mode)):
+            rbh_to_gb(thissample, df, gb_filepath, distance_mode=distance_mode)
 
         # now we add the remaining necessary information to the entries dict
         taxid_dict = {"sample": thissample}
@@ -1161,9 +1189,15 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname, unannotated_color =
         taxid_dict.update(NCBI_taxid_to_taxdict(ncbi, taxid))
         # now we need to add the genome size, number of chromosomes, and the filename
         # The genome size is the maximum value of each of the summed {thissample}_pos columns when grouped by {thissample}_scaf
-        taxid_dict["genome_size"] = df.groupby(f"{thissample}_scaf").max().sum()[f"{thissample}_pos"]
+        taxid_dict["genome_size"] = (np.nan if distance_mode == "index" else df.groupby(f"{thissample}_scaf").max().sum()[f"{thissample}_pos"])
+        taxid_dict["distance_mode"] = distance_mode
+        taxid_dict["distance_units"] = distance_metadata(thissample, df, distance_mode)["distance_units"]
+        if distance_mode == "index":
+            taxid_dict["genome_size"] = np.nan
         # The number of chromosomes is the number of unique {thissample}_scaf values
-        taxid_dict["number_of_chromosomes"] = df[f"{thissample}_scaf"].nunique()
+        counted = index_coordinates(thissample, df) if distance_mode == "index" else df.dropna(subset=[f"{thissample}_scaf", f"{thissample}_pos"])
+        taxid_dict["number_of_chromosomes"] = counted[f"{thissample}_scaf"].nunique()
+        taxid_dict["number_of_markers"] = len(counted)
         taxid_dict["rbh_filepath"] = rbhfile
         taxid_dict["rbh_filepath_abs"] = os.path.abspath(rbhfile)
         taxid_dict["rbh_filename"] = os.path.basename(rbhfile)
@@ -4946,6 +4980,11 @@ def construct_coo_matrix_from_sampledf(
         raise ValueError("gbgz_paths must be a dict or None.")
 
     # --- Basic checks ---
+    if "distance_mode" in sampledf.columns:
+        modes = sampledf["distance_mode"]
+        if modes.isna().any() or len(set(modes)) != 1:
+            raise ValueError("Cannot combine mixed or unknown distance modes; use one coordinate system for every genome.")
+        validate_mode(modes.iloc[0])
     if sample_column not in sampledf.columns:
         raise KeyError(f"sampledf missing required column '{sample_column}'.")
     if path_column not in sampledf.columns and gbgz_paths is None:
@@ -6797,12 +6836,14 @@ def plot_umap_from_files_just_df(
 
 
 def _cmd_build_distances(args):
+    base = "GTUMAP_index" if args.distance_mode == "index" else "GTUMAP"
     rbh_directory_to_distance_matrix(
         rbh_directory=args.rbh_dir,
         ALGname=args.alg_name,
         unannotated_color=args.unannotated_color,
-        outtsv=args.sampledf_out,
-        outputdir=args.distance_dir,
+        outtsv=args.sampledf_out or f"{base}/sampledf.tsv",
+        outputdir=args.distance_dir or f"{base}/distance_matrices/",
+        distance_mode=args.distance_mode,
     )
     return 0
 
@@ -6933,9 +6974,11 @@ def main(argv=None):
     p = sub.add_parser("build-distances", help="Walk an RBH directory and emit per-sample distance matrices + sampledf.tsv.")
     p.add_argument("--rbh-dir", required=True, help="Directory containing per-sample *.rbh files (output of odp).")
     p.add_argument("--alg-name", required=True, help="ALG database name (e.g. BCnSSimakov2022) used to parse rbh columns.")
-    p.add_argument("--sampledf-out", default="GTUMAP/sampledf.tsv", help="Output sample dataframe TSV.")
-    p.add_argument("--distance-dir", default="GTUMAP/distance_matrices/", help="Output directory for per-sample .gb.gz distance files.")
+    p.add_argument("--sampledf-out", default=None, help="Output sample dataframe TSV; defaults to GTUMAP/sampledf.tsv or GTUMAP_index/sampledf.tsv according to mode.")
+    p.add_argument("--distance-dir", default=None, help="Output distance directory; defaults to GTUMAP/distance_matrices/ or GTUMAP_index/distance_matrices/ according to mode.")
     p.add_argument("--unannotated-color", default="#3f3f7f", help="Plotting color for unannotated chromosomes.")
+    p.add_argument("--distance-mode", choices=["coordinate", "index"], default="coordinate",
+                   help="Coordinate differences (default), or rank differences among retained markers within each chromosome. Index mode does not infer ancestral gene order.")
     p.set_defaults(func=_cmd_build_distances)
 
     p = sub.add_parser("algcomboix", help="Build and persist the ALG locus-pair → column-index mapping from an ALG RBH file.")

@@ -79,7 +79,11 @@ config["sample_to_rbh_file"] = {rbh_to_samplename(x, config["ALGname"]): x
 print("We identified {} RBH files.".format(len(config["sample_to_rbh_file"])))
 
 # Results_base_directory is the prefix to which everything will be saved
-results_base_directory = "GTUMAP"
+distance_mode = config.get("distance_mode", "coordinate")
+if distance_mode not in ("coordinate", "index"):
+    raise ValueError("distance_mode must be coordinate or index")
+results_base_directory = "GTUMAP_index" if distance_mode == "index" else "GTUMAP"
+distance_suffix = ".index.gb.gz" if distance_mode == "index" else ".gb.gz"
 if results_base_directory.endswith("/"):
     results_base_directory = results_base_directory[:-1]
 
@@ -1035,7 +1039,8 @@ rule samples_and_gzipped:
     input:
         rbh_file = lambda wildcards: config["sample_to_rbh_file"][wildcards.sample]
     output:
-        gbgz = results_base_directory + "/distance_matrices/{sample}.gb.gz"
+        gbgz = results_base_directory + "/distance_matrices/{sample}" + distance_suffix,
+        metadata = results_base_directory + "/distance_matrices/{sample}" + distance_suffix + ".meta.json"
     threads: 1
     params:
         ALGname   = config["ALGname"]
@@ -1045,7 +1050,7 @@ rule samples_and_gzipped:
         runtime = 10,
         #highio  = 1,
     run:
-        rbh_to_distance_gbgz(input.rbh_file, output.gbgz, params.ALGname)
+        rbh_to_distance_gbgz(input.rbh_file, output.gbgz, params.ALGname, distance_mode=distance_mode)
 
 rule sample_df_all:
     input:
@@ -1065,7 +1070,7 @@ rule sample_df_all:
         sampleToRbhFileDict_to_sample_matrix(config["sample_to_rbh_file"],
                                              config["ALGname"],
                                              params.gbgz_directory,
-                                             output.sampletsv)
+                                             output.sampletsv, distance_mode=distance_mode)
 
 rule combo_to_index:
     input:
@@ -1168,7 +1173,7 @@ rule odogCooGen:
         Memory Efficiency: 110.91% of 195.31 GB
     """
     input:
-        gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
+        gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}" + distance_suffix,
                            sample = config["sample_to_rbh_file"].keys()),
         combotoindex = results_base_directory + "/combo_to_index.txt",
         sampletsv    = results_base_directory + "/sampledf.tsv"
@@ -1917,7 +1922,7 @@ rule odogClCooGen:
         Memory Efficiency: 110.91% of 195.31 GB
     """
     input:
-        gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
+        gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}" + distance_suffix,
                            sample = config["sample_to_rbh_file"].keys()),
         combotoindex = results_base_directory + "/combo_to_index.txt",
         sampletsv    = results_base_directory + "/sampledf.tsv"

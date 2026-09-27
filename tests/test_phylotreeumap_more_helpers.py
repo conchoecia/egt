@@ -179,7 +179,7 @@ def test_rbh_directory_to_distance_matrix_builds_sampledf(monkeypatch, tmp_path:
 
     monkeypatch.setattr(ptu, "NCBITaxa", lambda: FakeNCBI())
     monkeypatch.setattr(ptu.rbh_tools, "parse_rbh", lambda _path: rbhdf)
-    monkeypatch.setattr(ptu, "rbh_to_gb", lambda sample, df, outfile: Path(outfile).write_text("ok\n"))
+    monkeypatch.setattr(ptu, "rbh_to_gb", lambda sample, df, outfile, **kwargs: Path(outfile).write_text("ok\n"))
 
     outtsv = tmp_path / "GTUMAP" / "sampledf.tsv"
     outputdir = tmp_path / "GTUMAP" / "distance_matrices"
